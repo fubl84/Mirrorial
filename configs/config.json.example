@@ -1,0 +1,64 @@
+{
+  "system": {
+    "fps": 30,
+    "rotation": 0,
+    "units": "metric",
+    "timezone": "UTC"
+  },
+  "theme": {
+    "primaryColor": "#FFFFFF",
+    "secondaryColor": "#888888",
+    "accentColor": "#00BCD4",
+    "fontSizeBase": 16,
+    "fontFamily": "Roboto"
+  },
+  "layout": [
+    {
+      "id": "top_left",
+      "flex": 1,
+      "modules": [
+        {
+          "type": "clock",
+          "config": {
+            "showSeconds": false,
+            "format": "24h"
+          }
+        }
+      ]
+    },
+    {
+      "id": "top_right",
+      "flex": 1,
+      "modules": [
+        {
+          "type": "weather",
+          "config": {
+            "apiKey": "",
+            "location": "Berlin"
+          }
+        }
+      ]
+    },
+    {
+      "id": "bottom",
+      "flex": 2,
+      "modules": [
+        {
+          "type": "calendar",
+          "config": {
+            "googleClientId": "",
+            "calendarIds": ["primary"]
+          }
+        },
+        {
+          "type": "home_assistant",
+          "config": {
+            "url": "http://homeassistant.local:8123",
+            "token": "",
+            "entities": ["sensor.temperature"]
+          }
+        }
+      ]
+    }
+  ]
+}
