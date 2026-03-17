@@ -11,7 +11,7 @@ sudo apt-get update
 sudo apt-get install -y \
     cmake libsystemd-dev libinput-dev libudev-dev \
     libgbm-dev libdrm-dev libgles2-mesa-dev libegl1-mesa-dev \
-    libasound2-dev libx11-dev libxext-dev
+    libasound2-dev libx11-dev libxext-dev libxkbcommon-dev libfontconfig1-dev
 
 # 2. Clone and Build
 echo "🏗️ Cloning and Building Flutter-Pi (this may take a few minutes)..."
