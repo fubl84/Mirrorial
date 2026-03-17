@@ -26,15 +26,15 @@ class WeatherModule extends ConsumerWidget {
               'https://openweathermap.org/img/wn/${weather.icon}@2x.png',
               width: 64,
               height: 64,
-              errorBuilder: (context, error, stackTrace) => const Icon(Icons.wb_cloudy, size: 64, color: Colors.blueGrey),
+              errorBuilder: (context, error, stackTrace) => Icon(Icons.wb_cloudy, size: 64, color: Theme.of(context).textTheme.bodyMedium?.color),
             ),
             Text(
               '${weather.temp.round()}°C',
-              style: const TextStyle(fontSize: 48, color: Colors.white, fontWeight: FontWeight.w300),
+              style: Theme.of(context).textTheme.displayLarge?.copyWith(fontSize: 48),
             ),
             Text(
               location,
-              style: const TextStyle(fontSize: 18, color: Colors.grey),
+              style: Theme.of(context).textTheme.bodyMedium,
             ),
           ],
         );

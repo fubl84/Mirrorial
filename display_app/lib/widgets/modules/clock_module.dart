@@ -25,18 +25,11 @@ class ClockModule extends StatelessWidget {
           children: [
             Text(
               timeString,
-              style: const TextStyle(
-                fontSize: 64,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
+              style: Theme.of(context).textTheme.displayLarge,
             ),
             Text(
               dateString,
-              style: const TextStyle(
-                fontSize: 24,
-                color: Colors.grey,
-              ),
+              style: Theme.of(context).textTheme.bodyMedium,
             ),
           ],
         );

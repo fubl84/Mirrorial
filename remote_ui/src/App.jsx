@@ -146,6 +146,7 @@ function App() {
           {[
             { id: 'display', label: 'System', icon: Monitor },
             { id: 'layout', label: 'Layout Editor', icon: Layout },
+            { id: 'styling', label: 'Styling', icon: Settings },
             { id: 'integrations', label: 'Integrations', icon: Cloud },
           ].map(tab => (
             <button
@@ -294,6 +295,67 @@ function App() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {activeTab === 'styling' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
+                <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 text-white">Theme Colors</h2>
+                <div className="space-y-4">
+                  {[
+                    { label: 'Primary (Main Text)', key: 'primaryColor' },
+                    { label: 'Secondary (Subtitles)', key: 'secondaryColor' },
+                    { label: 'Accent (Icons/Highlights)', key: 'accentColor' },
+                  ].map(color => (
+                    <div key={color.key} className="flex items-center justify-between p-3 bg-slate-800/30 rounded-xl border border-slate-800">
+                      <label className="text-sm font-medium text-slate-300">{color.label}</label>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs font-mono text-slate-500 uppercase">{config.theme[color.key]}</span>
+                        <input 
+                          type="color" 
+                          value={config.theme[color.key]} 
+                          onChange={(e) => setConfig({ ...config, theme: { ...config.theme, [color.key]: e.target.value } })}
+                          className="w-10 h-10 rounded-lg cursor-pointer bg-transparent border-none"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
+                <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 text-white">Typography</h2>
+                <div className="space-y-6">
+                  <div>
+                    <div className="flex justify-between mb-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Font Scaling</label>
+                      <span className="text-indigo-400 font-bold">{config.theme.fontSizeBase}px</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="12" 
+                      max="32" 
+                      value={config.theme.fontSizeBase}
+                      onChange={(e) => setConfig({ ...config, theme: { ...config.theme, fontSizeBase: parseInt(e.target.value) } })}
+                      className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Font Family</label>
+                    <select 
+                      value={config.theme.fontFamily}
+                      onChange={(e) => setConfig({ ...config, theme: { ...config.theme, fontFamily: e.target.value } })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                    >
+                      <option value="Roboto">Roboto (Clean)</option>
+                      <option value="Inter">Inter (Modern)</option>
+                      <option value="Open Sans">Open Sans (Classic)</option>
+                      <option value="Montserrat">Montserrat (Stylish)</option>
+                    </select>
+                  </div>
+                </div>
+              </section>
             </div>
           )}
 

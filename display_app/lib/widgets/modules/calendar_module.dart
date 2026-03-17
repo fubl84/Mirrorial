@@ -16,15 +16,15 @@ class CalendarModule extends ConsumerWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
+        Text(
           'Upcoming Events',
-          style: TextStyle(fontSize: 18, color: Colors.redAccent, fontWeight: FontWeight.bold),
+          style: Theme.of(context).textTheme.titleLarge,
         ),
         const SizedBox(height: 12),
         eventsAsync.when(
           data: (events) {
             if (events.isEmpty) {
-              return const Text('No upcoming events', style: TextStyle(color: Colors.grey));
+              return Text('No upcoming events', style: Theme.of(context).textTheme.bodyMedium);
             }
 
             return Column(
@@ -36,7 +36,7 @@ class CalendarModule extends ConsumerWidget {
                       width: 4,
                       height: 24,
                       decoration: BoxDecoration(
-                        color: Colors.redAccent,
+                        color: Theme.of(context).iconTheme.color,
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
@@ -47,19 +47,19 @@ class CalendarModule extends ConsumerWidget {
                         children: [
                           Text(
                             event.title,
-                            style: const TextStyle(fontSize: 16, color: Colors.white, fontWeight: FontWeight.w500),
+                            style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w500),
                             overflow: TextOverflow.ellipsis,
                           ),
                           Text(
                             event.isAllDay ? 'All Day' : DateFormat('HH:mm').format(event.start),
-                            style: const TextStyle(fontSize: 12, color: Colors.grey),
+                            style: Theme.of(context).textTheme.bodyMedium,
                           ),
                         ],
                       ),
                     ),
                     Text(
                       _getRelativeDate(event.start),
-                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                      style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
                 ),

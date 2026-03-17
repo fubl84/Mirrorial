@@ -20,9 +20,9 @@ class HomeAssistantModule extends ConsumerWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
+        Text(
           'Smart Home',
-          style: TextStyle(fontSize: 18, color: Colors.indigoAccent, fontWeight: FontWeight.bold),
+          style: Theme.of(context).textTheme.titleLarge,
         ),
         const SizedBox(height: 12),
         ...entitiesToWatch.map((entityId) {
@@ -36,15 +36,13 @@ class HomeAssistantModule extends ConsumerWidget {
             padding: const EdgeInsets.symmetric(vertical: 6.0),
             child: Row(
               children: [
-                _buildIcon(entity),
+                _buildIcon(context, entity),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     entity.friendlyName,
-                    style: TextStyle(
-                      fontSize: 16, 
-                      color: isOff ? Colors.grey : Colors.white,
-                      fontWeight: isOff ? FontWeight.normal : FontWeight.w500,
+                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      color: isOff ? Theme.of(context).textTheme.bodyMedium?.color : Theme.of(context).textTheme.bodyLarge?.color,
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -52,7 +50,7 @@ class HomeAssistantModule extends ConsumerWidget {
                 Text(
                   '${entity.state.toUpperCase()}$unit',
                   style: TextStyle(
-                    color: _getStateColor(entity),
+                    color: isOff ? Theme.of(context).textTheme.bodyMedium?.color : Theme.of(context).iconTheme.color,
                     fontWeight: FontWeight.bold,
                     fontSize: 14,
                   ),
@@ -65,19 +63,19 @@ class HomeAssistantModule extends ConsumerWidget {
     );
   }
 
-  Widget _buildIcon(HAEntity entity) {
+  Widget _buildIcon(BuildContext context, HAEntity entity) {
     IconData iconData = Icons.device_unknown;
-    Color iconColor = Colors.grey;
+    Color? iconColor = Theme.of(context).textTheme.bodyMedium?.color;
 
     if (entity.entityId.startsWith('light')) {
       iconData = Icons.lightbulb;
-      iconColor = entity.state == 'on' ? Colors.yellow : Colors.grey;
+      iconColor = entity.state == 'on' ? Colors.yellow : iconColor;
     } else if (entity.entityId.startsWith('switch')) {
       iconData = Icons.power;
-      iconColor = entity.state == 'on' ? Colors.green : Colors.grey;
+      iconColor = entity.state == 'on' ? Colors.green : iconColor;
     } else if (entity.entityId.startsWith('sensor')) {
       iconData = Icons.sensors;
-      iconColor = Colors.blueAccent;
+      iconColor = Theme.of(context).iconTheme.color;
     } else if (entity.entityId.startsWith('climate')) {
       iconData = Icons.thermostat;
       iconColor = Colors.orange;
