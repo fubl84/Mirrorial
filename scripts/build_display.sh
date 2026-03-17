@@ -4,7 +4,7 @@
 set -e
 
 PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
-FLUTTER_SDK_DIR="$HOME/flutter-sdk"
+FLUTTER_SDK_DIR="$HOME/flutter"
 FLUTTER_BIN="$FLUTTER_SDK_DIR/bin/flutter"
 
 echo "🏗️ Preparing to build Mirrorial Display..."
