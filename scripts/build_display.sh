@@ -18,11 +18,8 @@ if [ ! -f "$FLUTTER_BIN" ]; then
     # Use Latest Stable Version as of March 2026
     VERSION="3.41.4"
     
-    if [ "$ARCH" == "aarch64" ]; then
-        URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_arm64_${VERSION}-stable.tar.xz"
-    else
-        URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${VERSION}-stable.tar.xz"
-    fi
+    # Unified URL for all Linux architectures as per releases_linux.json
+    URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${VERSION}-stable.tar.xz"
     
     echo "📥 Downloading from $URL..."
     # Download with status check
