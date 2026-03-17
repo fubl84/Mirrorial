@@ -4,6 +4,7 @@ import '../services/config_service.dart';
 import '../widgets/modules/clock_module.dart';
 import '../widgets/modules/weather_module.dart';
 import '../widgets/modules/ha_module.dart';
+import '../widgets/modules/calendar_module.dart';
 
 class FlexGrid extends ConsumerWidget {
   const FlexGrid({super.key});
@@ -50,6 +51,8 @@ class FlexGrid extends ConsumerWidget {
         return WeatherModule(config: config);
       case 'home_assistant':
         return HomeAssistantModule(config: config);
+      case 'calendar':
+        return CalendarModule(config: config);
       // More modules will be added here
       default:
         return Container();
