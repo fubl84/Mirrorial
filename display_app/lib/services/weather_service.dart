@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import '../services/config_service.dart';
+import '../services/event_bus.dart';
 
 class WeatherData {
   final double temp;
@@ -46,7 +47,22 @@ final weatherProvider = FutureProvider.autoDispose<WeatherData?>((ref) async {
   try {
     final response = await http.get(Uri.parse(url));
     if (response.statusCode == 200) {
-      return WeatherData.fromJson(jsonDecode(response.body));
+      final weather = WeatherData.fromJson(jsonDecode(response.body));
+
+      // Emit Weather Alert via Event Bus
+      if (weather.temp < 0) {
+        ref.read(eventBusProvider.notifier).emit(SystemEvent(
+          type: SystemEventType.weatherAlert,
+          message: '❄️ Frost Warning: ${weather.temp.round()}°C',
+        ));
+      } else if (weather.condition.toLowerCase().contains('storm')) {
+         ref.read(eventBusProvider.notifier).emit(SystemEvent(
+          type: SystemEventType.weatherAlert,
+          message: '⛈️ Storm Warning!',
+        ));
+      }
+
+      return weather;
     }
   } catch (e) {
     print('Weather Fetch Error: $e');

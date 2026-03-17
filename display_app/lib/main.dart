@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'services/config_service.dart';
+import 'services/event_bus.dart';
 import 'widgets/flex_grid.dart';
 
 void main() {
@@ -50,7 +51,12 @@ class MirrorialApp extends ConsumerWidget {
           home: Scaffold(
             body: RotatedBox(
               quarterTurns: (rotation / 90).round() % 4,
-              child: const FlexGrid(),
+              child: Stack(
+                children: [
+                  const FlexGrid(),
+                  const AlertOverlay(),
+                ],
+              ),
             ),
           ),
         );
@@ -65,5 +71,64 @@ class MirrorialApp extends ConsumerWidget {
         ),
       ),
     );
+  }
+}
+
+class AlertOverlay extends ConsumerWidget {
+  const AlertOverlay({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final event = ref.watch(eventBusProvider);
+    if (event == null) return const SizedBox.shrink();
+
+    return Positioned(
+      top: 40,
+      left: 20,
+      right: 20,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 500),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        decoration: BoxDecoration(
+          color: _getAlertColor(event.type).withOpacity(0.2),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _getAlertColor(event.type).withOpacity(0.5), width: 2),
+        ),
+        child: Row(
+          children: [
+            Icon(_getAlertIcon(event.type), color: _getAlertColor(event.type), size: 28),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                event.message,
+                style: TextStyle(
+                  color: _getAlertColor(event.type),
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _getAlertColor(SystemEventType type) {
+    switch (type) {
+      case SystemEventType.weatherAlert: return Colors.lightBlueAccent;
+      case SystemEventType.haAlert: return Colors.orangeAccent;
+      case SystemEventType.calendarAlert: return Colors.redAccent;
+      default: return Colors.white;
+    }
+  }
+
+  IconData _getAlertIcon(SystemEventType type) {
+    switch (type) {
+      case SystemEventType.weatherAlert: return Icons.warning_amber_rounded;
+      case SystemEventType.haAlert: return Icons.notification_important_rounded;
+      case SystemEventType.calendarAlert: return Icons.event_available_rounded;
+      default: return Icons.info_outline_rounded;
+    }
   }
 }
