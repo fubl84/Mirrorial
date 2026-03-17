@@ -11,10 +11,18 @@ echo "🏗️ Preparing to build Mirrorial Display..."
 
 # 1. Install Flutter SDK if missing
 if [ ! -f "$FLUTTER_BIN" ]; then
-    echo "📥 Flutter SDK not found. Downloading portable SDK for ARM64..."
+    ARCH=$(uname -m)
+    echo "📥 Flutter SDK not found. Detected architecture: $ARCH"
     mkdir -p "$FLUTTER_SDK_DIR"
-    # Note: Using the stable Linux ARM64 release
-    curl -L https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.24.3-stable.tar.xz | tar -xJ -C "$HOME"
+    
+    if [ "$ARCH" == "aarch64" ]; then
+        URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_arm64_3.24.3-stable.tar.xz"
+    else
+        URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.24.3-stable.tar.xz"
+    fi
+    
+    echo "📥 Downloading from $URL..."
+    curl -L "$URL" | tar -xJ -C "$HOME"
 fi
 
 # 2. Build the Flutter Bundle
