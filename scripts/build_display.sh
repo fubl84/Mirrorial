@@ -15,14 +15,27 @@ if [ ! -f "$FLUTTER_BIN" ]; then
     echo "📥 Flutter SDK not found. Detected architecture: $ARCH"
     mkdir -p "$FLUTTER_SDK_DIR"
     
+    # Use Latest Stable Version as of March 2026
+    VERSION="3.41.4"
+    
     if [ "$ARCH" == "aarch64" ]; then
-        URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_arm64_3.24.3-stable.tar.xz"
+        URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_arm64_${VERSION}-stable.tar.xz"
     else
-        URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.24.3-stable.tar.xz"
+        URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${VERSION}-stable.tar.xz"
     fi
     
     echo "📥 Downloading from $URL..."
-    curl -L "$URL" | tar -xJ -C "$HOME"
+    # Download with status check
+    curl -f -L "$URL" -o "/tmp/flutter.tar.xz"
+    
+    if [ $? -eq 0 ]; then
+        echo "📦 Extracting Flutter SDK..."
+        tar -xJ -f "/tmp/flutter.tar.xz" -C "$HOME"
+        rm "/tmp/flutter.tar.xz"
+    else
+        echo "❌ Error: Failed to download Flutter SDK. Check your internet connection or the URL."
+        exit 1
+    fi
 fi
 
 # 2. Build the Flutter Bundle
