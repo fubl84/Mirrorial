@@ -102,6 +102,22 @@ function App() {
     setConfig({ ...config, layout: newLayout });
   };
 
+  const [calAuthStatus, setCalAuthStatus] = useState(false);
+  useEffect(() => {
+    if (activeTab === 'integrations') {
+      axios.get(`${API_BASE}/auth/google/status`).then(res => setCalAuthStatus(res.data.authenticated));
+    }
+  }, [activeTab]);
+
+  const connectGoogle = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/auth/google/url`);
+      window.open(res.data.url, '_blank');
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to start Google Auth. Make sure Client ID/Secret are saved first.');
+    }
+  };
+
   if (loading) return <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center">Loading...</div>;
 
   return (
@@ -315,40 +331,51 @@ function App() {
 
               {/* Home Assistant */}
               <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
+                ...
+              </section>
+
+              {/* Google Calendar */}
+              <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
                 <div className="flex items-center gap-3 mb-6">
-                  <Monitor size={24} className="text-indigo-400" />
-                  <h2 className="text-lg font-semibold text-white">Home Assistant</h2>
+                  <Layout size={24} className="text-red-400" />
+                  <h2 className="text-lg font-semibold text-white">Google Calendar</h2>
                 </div>
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Instance URL</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Client ID</label>
                     <input 
                       type="text"
-                      placeholder="http://homeassistant.local:8123"
-                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'home_assistant')?.config.url || ''}
-                      onChange={(e) => updateIntegrationConfig('home_assistant', 'url', e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                      placeholder="Enter Google Client ID"
+                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'calendar')?.config.clientId || ''}
+                      onChange={(e) => updateIntegrationConfig('calendar', 'clientId', e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Long-Lived Access Token</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Client Secret</label>
                     <input 
                       type="password"
-                      placeholder="Paste HA Token"
-                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'home_assistant')?.config.token || ''}
-                      onChange={(e) => updateIntegrationConfig('home_assistant', 'token', e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                      placeholder="Enter Google Client Secret"
+                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'calendar')?.config.clientSecret || ''}
+                      onChange={(e) => updateIntegrationConfig('calendar', 'clientSecret', e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
                     />
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Entity IDs (comma separated)</label>
-                    <input 
-                      type="text"
-                      placeholder="light.living_room, sensor.temp"
-                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'home_assistant')?.config.entities?.join(', ') || ''}
-                      onChange={(e) => updateIntegrationConfig('home_assistant', 'entities', e.target.value.split(',').map(s => s.trim()))}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
-                    />
+                  
+                  <div className="pt-2">
+                    <button 
+                      onClick={connectGoogle}
+                      className={`w-full flex items-center justify-center gap-2 p-3 rounded-xl font-bold transition-all ${
+                        calAuthStatus ? 'bg-green-500/10 text-green-500 border border-green-500/20' : 'bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-500/10'
+                      }`}
+                    >
+                      {calAuthStatus ? '✓ Google Calendar Connected' : 'Connect Google Calendar'}
+                    </button>
+                    {calAuthStatus && (
+                      <p className="text-[10px] text-slate-500 mt-2 text-center uppercase tracking-tighter">
+                        To change account, delete tokens.json on the Pi and reconnect.
+                      </p>
+                    )}
                   </div>
                 </div>
               </section>

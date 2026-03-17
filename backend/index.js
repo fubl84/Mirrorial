@@ -5,10 +5,12 @@ const fs = require('fs-extra');
 const path = require('path');
 const morgan = require('morgan');
 const { exec } = require('child_process');
+const { OAuth2Client } = require('google-auth-library');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const CONFIG_PATH = path.join(__dirname, '../config.json');
+const TOKENS_PATH = path.join(__dirname, '../tokens.json');
 
 app.use(cors());
 app.use(morgan('dev'));
@@ -72,6 +74,64 @@ app.post('/api/system/:command', (req, res) => {
         }
         res.json({ success: true, message: `Command ${command} triggered` });
     });
+});
+
+// API: Google Calendar Handshake
+app.get('/api/auth/google/url', async (req, res) => {
+    try {
+        const config = await fs.readJson(CONFIG_PATH);
+        const cal = config.layout.flatMap(p => p.modules).find(m => m.type === 'calendar')?.config;
+        
+        if (!cal || !cal.clientId || !cal.clientSecret) {
+            return res.status(400).json({ error: 'Google Client ID/Secret not configured in layout.' });
+        }
+
+        const oauth2Client = new OAuth2Client(
+            cal.clientId,
+            cal.clientSecret,
+            `http://${req.hostname}:3000/api/auth/google/callback`
+        );
+
+        const url = oauth2Client.generateAuthUrl({
+            access_type: 'offline',
+            scope: ['https://www.googleapis.com/auth/calendar.readonly'],
+            prompt: 'consent'
+        });
+
+        res.json({ url });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to generate auth URL', details: err.message });
+    }
+});
+
+app.get('/api/auth/google/callback', async (req, res) => {
+    try {
+        const { code } = req.query;
+        const config = await fs.readJson(CONFIG_PATH);
+        const cal = config.layout.flatMap(p => p.modules).find(m => m.type === 'calendar')?.config;
+
+        const oauth2Client = new OAuth2Client(
+            cal.clientId,
+            cal.clientSecret,
+            `http://${req.hostname}:3000/api/auth/google/callback`
+        );
+
+        const { tokens } = await oauth2Client.getToken(code);
+        await fs.writeJson(TOKENS_PATH, tokens);
+
+        res.send('<h1>Authentication Successful!</h1><p>You can close this window and return to the Mirrorial Dashboard.</p>');
+    } catch (err) {
+        res.status(500).send(`Authentication Failed: ${err.message}`);
+    }
+});
+
+app.get('/api/auth/google/status', async (req, res) => {
+    try {
+        const exists = await fs.pathExists(TOKENS_PATH);
+        res.json({ authenticated: exists });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to check status' });
+    }
 });
 
 // Fallback to React index.html
