@@ -70,7 +70,8 @@ function App() {
   const addModuleToPane = (paneId, type) => {
     const newModule = {
       type,
-      config: type === 'weather' ? { location: 'Berlin', apiKey: '' } : {}
+      config: type === 'weather' ? { location: 'Berlin', apiKey: '' } : 
+              type === 'home_assistant' ? { url: '', token: '', entities: [] } : {}
     };
     const newLayout = config.layout.map(p => {
       if (p.id === paneId) {
@@ -90,6 +91,14 @@ function App() {
       }
       return p;
     });
+    setConfig({ ...config, layout: newLayout });
+  };
+
+  const updateIntegrationConfig = (type, key, value) => {
+    const newLayout = JSON.parse(JSON.stringify(config.layout));
+    newLayout.forEach(p => p.modules.forEach(m => {
+      if (m.type === type) m.config[key] = value;
+    }));
     setConfig({ ...config, layout: newLayout });
   };
 
@@ -117,7 +126,6 @@ function App() {
           </div>
         </header>
 
-        {/* Tab Navigation */}
         <div className="flex gap-1 p-1 bg-slate-900/50 rounded-2xl border border-slate-800 mb-8 overflow-x-auto no-scrollbar">
           {[
             { id: 'display', label: 'System', icon: Monitor },
@@ -136,7 +144,7 @@ function App() {
           ))}
         </div>
 
-        <main className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
+        <main className="space-y-8">
           
           {activeTab === 'display' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -191,15 +199,6 @@ function App() {
                     <div className="text-left">
                       <div className="font-semibold">Reboot Pi</div>
                       <div className="text-xs text-slate-500">Full system reboot</div>
-                    </div>
-                  </button>
-                  <button onClick={() => runCommand('shutdown')} className="flex items-center gap-3 bg-red-500/5 hover:bg-red-500/10 p-4 rounded-xl transition-all group active:scale-95">
-                    <div className="w-10 h-10 rounded-lg bg-red-500/10 flex items-center justify-center group-hover:bg-red-500/20">
-                      <Power size={18} className="text-red-500" />
-                    </div>
-                    <div className="text-left text-red-400">
-                      <div className="font-semibold">Shutdown</div>
-                      <div className="text-xs text-red-500/60">Power off the Raspberry Pi</div>
                     </div>
                   </button>
                 </div>
@@ -263,7 +262,6 @@ function App() {
                         </div>
                       ))}
                       
-                      {/* Add Module Dropdown/Button */}
                       <div className="relative group">
                         <select 
                           value=""
@@ -285,71 +283,72 @@ function App() {
 
           {activeTab === 'integrations' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Weather */}
               <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
                 <div className="flex items-center gap-3 mb-6">
                   <Cloud size={24} className="text-sky-400" />
                   <h2 className="text-lg font-semibold text-white">Weather (OpenWeatherMap)</h2>
                 </div>
                 <div className="space-y-4">
-                  {/* Find first weather module to edit its config */}
-                  {(() => {
-                    let weatherMod;
-                    config.layout.forEach(p => p.modules.forEach(m => {
-                      if (m.type === 'weather') weatherMod = m;
-                    }));
-                    
-                    if (!weatherMod) return <div className="text-slate-500 text-sm italic">Add a Weather module to the layout to configure it.</div>;
-
-                    return (
-                      <>
-                        <div>
-                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">API Key</label>
-                          <input 
-                            type="password"
-                            placeholder="Enter OWM API Key"
-                            value={weatherMod.config.apiKey || ''}
-                            onChange={(e) => {
-                              const newLayout = JSON.parse(JSON.stringify(config.layout));
-                              newLayout.forEach(p => p.modules.forEach(m => {
-                                if (m.type === 'weather') m.config.apiKey = e.target.value;
-                              }));
-                              setConfig({ ...config, layout: newLayout });
-                            }}
-                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Location City</label>
-                          <input 
-                            type="text"
-                            placeholder="e.g. London"
-                            value={weatherMod.config.location || ''}
-                            onChange={(e) => {
-                              const newLayout = JSON.parse(JSON.stringify(config.layout));
-                              newLayout.forEach(p => p.modules.forEach(m => {
-                                if (m.type === 'weather') m.config.location = e.target.value;
-                              }));
-                              setConfig({ ...config, layout: newLayout });
-                            }}
-                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
-                          />
-                        </div>
-                      </>
-                    );
-                  })()}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">API Key</label>
+                    <input 
+                      type="password"
+                      placeholder="Enter OWM API Key"
+                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'weather')?.config.apiKey || ''}
+                      onChange={(e) => updateIntegrationConfig('weather', 'apiKey', e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Location City</label>
+                    <input 
+                      type="text"
+                      placeholder="e.g. London"
+                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'weather')?.config.location || ''}
+                      onChange={(e) => updateIntegrationConfig('weather', 'location', e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                    />
+                  </div>
                 </div>
               </section>
 
+              {/* Home Assistant */}
               <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
                 <div className="flex items-center gap-3 mb-6">
                   <Monitor size={24} className="text-indigo-400" />
                   <h2 className="text-lg font-semibold text-white">Home Assistant</h2>
                 </div>
-                <div className="space-y-4 opacity-50 pointer-events-none">
-                  <p className="text-xs text-amber-500 font-bold uppercase tracking-widest bg-amber-500/10 p-2 rounded text-center">Coming in v1.1</p>
+                <div className="space-y-4">
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Instance URL</label>
-                    <input disabled type="text" placeholder="http://homeassistant.local:8123" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3" />
+                    <input 
+                      type="text"
+                      placeholder="http://homeassistant.local:8123"
+                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'home_assistant')?.config.url || ''}
+                      onChange={(e) => updateIntegrationConfig('home_assistant', 'url', e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Long-Lived Access Token</label>
+                    <input 
+                      type="password"
+                      placeholder="Paste HA Token"
+                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'home_assistant')?.config.token || ''}
+                      onChange={(e) => updateIntegrationConfig('home_assistant', 'token', e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Entity IDs (comma separated)</label>
+                    <input 
+                      type="text"
+                      placeholder="light.living_room, sensor.temp"
+                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'home_assistant')?.config.entities?.join(', ') || ''}
+                      onChange={(e) => updateIntegrationConfig('home_assistant', 'entities', e.target.value.split(',').map(s => s.trim()))}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                    />
                   </div>
                 </div>
               </section>
