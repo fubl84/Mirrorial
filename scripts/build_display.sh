@@ -11,29 +11,14 @@ echo "🏗️ Preparing to build Mirrorial Display..."
 
 # 1. Install Flutter SDK if missing
 if [ ! -f "$FLUTTER_BIN" ]; then
-    ARCH=$(uname -m)
-    echo "📥 Flutter SDK not found. Detected architecture: $ARCH"
-    mkdir -p "$FLUTTER_SDK_DIR"
+    echo "📥 Flutter SDK not found. Installing via official Git clone method (recommended for ARM64)..."
     
-    # Use Latest Stable Version as of March 2026
-    VERSION="3.41.4"
+    # Clone the stable channel into the home directory
+    git clone https://github.com/flutter/flutter.git -b stable "$HOME/flutter"
     
-    # Unified URL for all Linux architectures as per releases_linux.json
-    URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${VERSION}-stable.tar.xz"
-    
-    echo "📥 Downloading from $URL..."
-    # Download to home directory instead of /tmp (which is often a limited RAM disk)
-    curl -f -L "$URL" -o "$HOME/flutter.tar.xz"
-    
-    if [ $? -eq 0 ]; then
-        echo "📦 Extracting Flutter SDK..."
-        tar -xJ -f "$HOME/flutter.tar.xz" -C "$HOME"
-        rm "$HOME/flutter.tar.xz"
-    else
-        echo "❌ Error: Failed to download Flutter SDK."
-        rm -f "$HOME/flutter.tar.xz"
-        exit 1
-    fi
+    # Trigger first-run download of artifacts
+    echo "⚙️ Initializing Flutter (downloading ARM64 engine & artifacts)..."
+    "$FLUTTER_BIN" --version
 fi
 
 # 2. Build the Flutter Bundle
