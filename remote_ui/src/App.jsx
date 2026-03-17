@@ -174,7 +174,7 @@ function App() {
                       <select 
                         value={config.system.fps}
                         onChange={(e) => setConfig({ ...config, system: { ...config.system, fps: parseInt(e.target.value) } })}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
                       >
                         <option value={30}>30 FPS (Standard)</option>
                         <option value={60}>60 FPS (Ultra Smooth)</option>
@@ -185,7 +185,7 @@ function App() {
                       <select 
                         value={config.system.rotation}
                         onChange={(e) => setConfig({ ...config, system: { ...config.system, rotation: parseInt(e.target.value) } })}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
                       >
                         <option value={0}>0° - Landscape</option>
                         <option value={90}>90° - Portrait</option>
@@ -193,6 +193,37 @@ function App() {
                         <option value={270}>270° - Portrait (Rev)</option>
                       </select>
                     </div>
+                  </div>
+                </div>
+                
+                <hr className="my-6 border-slate-800" />
+                
+                <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 text-white">Power Schedule</h2>
+                <div className="space-y-5">
+                  <div className="flex items-center justify-between p-3 bg-slate-800/30 rounded-xl border border-slate-800">
+                    <div>
+                      <div className="text-sm font-semibold text-white">Auto Shutdown</div>
+                      <div className="text-[10px] text-slate-500 uppercase font-bold">Shut down the Pi daily</div>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        className="sr-only peer"
+                        checked={config.system.power?.autoShutdownEnabled || false}
+                        onChange={(e) => setConfig({ ...config, system: { ...config.system, power: { ...config.system.power, autoShutdownEnabled: e.target.checked } } })}
+                      />
+                      <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                    </label>
+                  </div>
+                  
+                  <div className={config.system.power?.autoShutdownEnabled ? 'block' : 'opacity-40 pointer-events-none'}>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Shutdown Time (24h)</label>
+                    <input 
+                      type="time" 
+                      value={config.system.power?.autoShutdownTime || '23:00'}
+                      onChange={(e) => setConfig({ ...config, system: { ...config.system, power: { ...config.system.power, autoShutdownTime: e.target.value } } })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm text-white"
+                    />
                   </div>
                 </div>
               </section>

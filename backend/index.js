@@ -139,8 +139,31 @@ app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '../remote_ui/dist/index.html'));
 });
 
+// Helper: Auto-shutdown checker
+const startPowerManager = () => {
+    setInterval(async () => {
+        try {
+            const config = await fs.readJson(CONFIG_PATH);
+            const power = config.system.power;
+            
+            if (power && power.autoShutdownEnabled && power.autoShutdownTime) {
+                const now = new Date();
+                const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+                
+                if (currentTime === power.autoShutdownTime) {
+                    console.log(`🌙 Scheduled shutdown triggered at ${currentTime}`);
+                    exec('sudo shutdown -h now');
+                }
+            }
+        } catch (err) {
+            console.error('Power Manager Error:', err);
+        }
+    }, 60000); // Check every minute
+};
+
 app.listen(PORT, async () => {
     await ensureConfig();
+    startPowerManager();
     console.log(`🚀 Mirrorial Backend running on port ${PORT}`);
     console.log(`📄 Managing config at: ${CONFIG_PATH}`);
 });
