@@ -22,15 +22,16 @@ if [ ! -f "$FLUTTER_BIN" ]; then
     URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${VERSION}-stable.tar.xz"
     
     echo "📥 Downloading from $URL..."
-    # Download with status check
-    curl -f -L "$URL" -o "/tmp/flutter.tar.xz"
+    # Download to home directory instead of /tmp (which is often a limited RAM disk)
+    curl -f -L "$URL" -o "$HOME/flutter.tar.xz"
     
     if [ $? -eq 0 ]; then
         echo "📦 Extracting Flutter SDK..."
-        tar -xJ -f "/tmp/flutter.tar.xz" -C "$HOME"
-        rm "/tmp/flutter.tar.xz"
+        tar -xJ -f "$HOME/flutter.tar.xz" -C "$HOME"
+        rm "$HOME/flutter.tar.xz"
     else
-        echo "❌ Error: Failed to download Flutter SDK. Check your internet connection or the URL."
+        echo "❌ Error: Failed to download Flutter SDK."
+        rm -f "$HOME/flutter.tar.xz"
         exit 1
     fi
 fi
