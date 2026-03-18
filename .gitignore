@@ -1,0 +1,38 @@
+# Mirrorial - Git Ignore
+# -------------------------
+
+# Local Configuration & Secrets (IMPORTANT)
+config.json
+tokens.json
+
+# Node.js / React
+node_modules/
+dist/
+.eslintcache
+.env
+.env.local
+
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+display_app/bundle/
+ios/
+android/
+*.app_
+*.exe
+*.dll
+*.so
+*.dylib
+
+# System / OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+*.log
+
+# Swap files
+/var/mirrorial_swap
