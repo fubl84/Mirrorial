@@ -125,6 +125,32 @@ app.get('/api/auth/google/status', async (req, res) => {
     }
 });
 
+// API: Home Assistant Discovery Proxy
+app.get('/api/ha/entities', async (req, res) => {
+    try {
+        const config = await fs.readJson(CONFIG_PATH);
+        const ha = config.layout.flatMap(p => p.modules).find(m => m.type === 'home_assistant')?.config;
+
+        if (!ha || !ha.url || !ha.token) {
+            return res.status(400).json({ error: 'HA URL and Token must be saved first.' });
+        }
+
+        const response = await axios.get(`${ha.url}/api/states`, {
+            headers: { 'Authorization': `Bearer ${ha.token}` }
+        });
+
+        const entities = response.data.map(e => ({
+            id: e.entity_id,
+            name: e.attributes.friendly_name || e.entity_id,
+            state: e.state
+        }));
+
+        res.json(entities);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch entities', details: err.message });
+    }
+});
+
 // Fallback to React index.html
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '../remote_ui/dist/index.html'));
