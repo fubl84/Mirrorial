@@ -396,29 +396,70 @@ function App() {
               <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
                 <div className="flex items-center gap-3 mb-6">
                   <Cloud size={24} className="text-sky-400" />
-                  <h2 className="text-lg font-semibold text-white">Weather (OpenWeatherMap)</h2>
+                  <h2 className="text-lg font-semibold text-white">Weather Integration</h2>
                 </div>
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">API Key</label>
-                    <input 
-                      type="password"
-                      placeholder="Enter OWM API Key"
-                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'weather')?.config.apiKey || ''}
-                      onChange={(e) => updateIntegrationConfig('weather', 'apiKey', e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
-                    />
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Service Provider</label>
+                    <select 
+                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'weather')?.config.provider || 'open-meteo'}
+                      onChange={(e) => updateIntegrationConfig('weather', 'provider', e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
+                    >
+                      <option value="open-meteo">Open-Meteo (Free, No Key Needed)</option>
+                      <option value="openweathermap">OpenWeatherMap (Requires API Key)</option>
+                    </select>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Location City</label>
-                    <input 
-                      type="text"
-                      placeholder="e.g. London"
-                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'weather')?.config.location || ''}
-                      onChange={(e) => updateIntegrationConfig('weather', 'location', e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
-                    />
-                  </div>
+
+                  {config.layout.flatMap(p => p.modules).find(m => m.type === 'weather')?.config.provider === 'openweathermap' ? (
+                    <>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">API Key</label>
+                        <input 
+                          type="password"
+                          placeholder="Enter OWM API Key"
+                          value={config.layout.flatMap(p => p.modules).find(m => m.type === 'weather')?.config.apiKey || ''}
+                          onChange={(e) => updateIntegrationConfig('weather', 'apiKey', e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Location City</label>
+                        <input 
+                          type="text"
+                          placeholder="e.g. London"
+                          value={config.layout.flatMap(p => p.modules).find(m => m.type === 'weather')?.config.location || ''}
+                          onChange={(e) => updateIntegrationConfig('weather', 'location', e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Latitude</label>
+                        <input 
+                          type="number"
+                          step="0.01"
+                          placeholder="52.52"
+                          value={config.layout.flatMap(p => p.modules).find(m => m.type === 'weather')?.config.lat || 52.52}
+                          onChange={(e) => updateIntegrationConfig('weather', 'lat', parseFloat(e.target.value))}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Longitude</label>
+                        <input 
+                          type="number"
+                          step="0.01"
+                          placeholder="13.41"
+                          value={config.layout.flatMap(p => p.modules).find(m => m.type === 'weather')?.config.lon || 13.41}
+                          onChange={(e) => updateIntegrationConfig('weather', 'lon', parseFloat(e.target.value))}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </section>
 
