@@ -6,6 +6,7 @@ const path = require('path');
 const morgan = require('morgan');
 const { exec } = require('child_process');
 const { OAuth2Client } = require('google-auth-library');
+const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -76,14 +77,18 @@ app.post('/api/system/:command', (req, res) => {
     });
 });
 
-// Google OAuth2 Config (Built-in for Mirrorial)
-const MIRRORIAL_CLIENT_ID = 'your-mirrorial-client-id.apps.googleusercontent.com'; // Replace with a real one or keep as is for user-provided flow
+// Google OAuth2 Config
+const DEFAULT_CLIENT_ID = 'your-mirrorial-client-id.apps.googleusercontent.com'; 
 
 // API: Google Calendar Device Flow
 app.get('/api/auth/google/device/start', async (req, res) => {
     try {
+        const config = await fs.readJson(CONFIG_PATH);
+        const calConfig = config.layout.flatMap(p => p.modules).find(m => m.type === 'calendar')?.config;
+        const clientId = calConfig?.clientId || DEFAULT_CLIENT_ID;
+
         const response = await axios.post('https://oauth2.googleapis.com/device/code', {
-            client_id: MIRRORIAL_CLIENT_ID,
+            client_id: clientId,
             scope: 'https://www.googleapis.com/auth/calendar.readonly'
         });
         res.json(response.data);
@@ -95,8 +100,12 @@ app.get('/api/auth/google/device/start', async (req, res) => {
 app.post('/api/auth/google/device/poll', async (req, res) => {
     try {
         const { device_code } = req.body;
+        const config = await fs.readJson(CONFIG_PATH);
+        const calConfig = config.layout.flatMap(p => p.modules).find(m => m.type === 'calendar')?.config;
+        const clientId = calConfig?.clientId || DEFAULT_CLIENT_ID;
+
         const response = await axios.post('https://oauth2.googleapis.com/token', {
-            client_id: MIRRORIAL_CLIENT_ID,
+            client_id: clientId,
             device_code,
             grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
         });
@@ -108,7 +117,6 @@ app.post('/api/auth/google/device/poll', async (req, res) => {
             res.json({ success: false, status: response.data.error });
         }
     } catch (err) {
-        // Axios throws on 4xx, which Google uses for "pending"
         if (err.response && err.response.data.error === 'authorization_pending') {
             return res.json({ success: false, status: 'pending' });
         }
