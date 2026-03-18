@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { Settings, RefreshCcw, Power, Save, Monitor, Layout, Cloud, Plus, Trash2, GripVertical, Info } from 'lucide-react';
+import MirrorPreview from './components/MirrorPreview';
 
 const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:3000/api' : '/api';
 
@@ -16,6 +17,9 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState('display'); // display, layout, integrations
+
+  const [calAuthStatus, setCalAuthStatus] = useState(false);
+  const [deviceFlow, setDeviceFlow] = useState(null);
 
   useEffect(() => {
     fetchConfig();
@@ -70,7 +74,7 @@ function App() {
   const addModuleToPane = (paneId, type) => {
     const newModule = {
       type,
-      config: type === 'weather' ? { location: 'Berlin', apiKey: '' } : 
+      config: type === 'weather' ? { provider: 'open-meteo', lat: 52.52, lon: 13.41 } : 
               type === 'home_assistant' ? { url: '', token: '', entities: [] } : {}
     };
     const newLayout = config.layout.map(p => {
@@ -102,7 +106,6 @@ function App() {
     setConfig({ ...config, layout: newLayout });
   };
 
-  const [calAuthStatus, setCalAuthStatus] = useState(false);
   useEffect(() => {
     if (activeTab === 'integrations') {
       axios.get(`${API_BASE}/auth/google/status`).then(res => setCalAuthStatus(res.data.authenticated));
@@ -111,10 +114,24 @@ function App() {
 
   const connectGoogle = async () => {
     try {
-      const res = await axios.get(`${API_BASE}/auth/google/url`);
-      window.open(res.data.url, '_blank');
+      const res = await axios.get(`${API_BASE}/auth/google/device/start`);
+      setDeviceFlow(res.data);
+      
+      const interval = setInterval(async () => {
+        try {
+          const poll = await axios.post(`${API_BASE}/auth/google/device/poll`, { device_code: res.data.device_code });
+          if (poll.data.success) {
+            clearInterval(interval);
+            setCalAuthStatus(true);
+            setDeviceFlow(null);
+            alert('Successfully connected to Google!');
+          }
+        } catch (e) {
+          // Polling...
+        }
+      }, 5000);
     } catch (err) {
-      alert(err.response?.data?.error || 'Failed to start Google Auth. Make sure Client ID/Secret are saved first.');
+      alert('Failed to start Google Auth.');
     }
   };
 
@@ -122,7 +139,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200">
-      <div className="max-w-6xl mx-auto p-4 md:p-8">
+      <div className="max-w-7xl mx-auto p-4 md:p-8">
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/20">M</div>
@@ -255,76 +272,88 @@ function App() {
           )}
 
           {activeTab === 'layout' && (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-xl font-bold text-white">Pane Configuration</h2>
-                  <p className="text-sm text-slate-500">Define the vertical sections of your mirror.</p>
+            <div className="flex flex-col lg:flex-row gap-8">
+              <div className="flex-1 space-y-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xl font-bold text-white">Pane Configuration</h2>
+                    <p className="text-sm text-slate-500">Define the vertical sections of your mirror.</p>
+                  </div>
+                  <button 
+                    onClick={addPane}
+                    className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl transition-all active:scale-95 border border-slate-700"
+                  >
+                    <Plus size={18} /> Add Pane
+                  </button>
                 </div>
-                <button 
-                  onClick={addPane}
-                  className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl transition-all active:scale-95 border border-slate-700"
-                >
-                  <Plus size={18} /> Add Pane
-                </button>
+
+                <div className="grid grid-cols-1 gap-4">
+                  {config.layout.map((pane, pIdx) => (
+                    <div key={pane.id} className="bg-slate-900/50 border border-slate-800 rounded-2xl overflow-hidden">
+                      <div className="p-4 bg-slate-800/30 flex items-center justify-between border-b border-slate-800">
+                        <div className="flex items-center gap-4">
+                          <GripVertical size={20} className="text-slate-600" />
+                          <span className="font-bold text-slate-300">Pane #{pIdx + 1}</span>
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs text-slate-500 uppercase font-bold">Size:</label>
+                            <input 
+                              type="number"
+                              value={pane.flex}
+                              onChange={(e) => {
+                                const newLayout = [...config.layout];
+                                newLayout[pIdx].flex = parseInt(e.target.value) || 1;
+                                setConfig({ ...config, layout: newLayout });
+                              }}
+                              className="w-16 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-indigo-500"
+                            />
+                          </div>
+                        </div>
+                        <button onClick={() => removePane(pane.id)} className="text-slate-500 hover:text-red-400 transition-colors">
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
+                      <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {pane.modules.map((mod, mIdx) => (
+                          <div key={mIdx} className="bg-slate-950 border border-slate-800 rounded-xl p-4 relative group">
+                            <div className="flex items-center gap-3 mb-2">
+                              <span className="text-2xl">{MODULE_TYPES.find(t => t.id === mod.type)?.icon}</span>
+                              <span className="font-bold text-slate-200 capitalize">{mod.type.replace('_', ' ')}</span>
+                            </div>
+                            <button 
+                              onClick={() => removeModuleFromPane(pane.id, mIdx)}
+                              className="absolute top-4 right-4 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        ))}
+                        
+                        <div className="relative group">
+                          <select 
+                            value=""
+                            onChange={(e) => addModuleToPane(pane.id, e.target.value)}
+                            className="w-full h-full min-h-[80px] bg-slate-900/50 border-2 border-dashed border-slate-800 hover:border-indigo-500/50 rounded-xl flex items-center justify-center text-slate-500 hover:text-indigo-400 transition-all cursor-pointer appearance-none px-4 text-center font-medium"
+                          >
+                            <option value="" disabled>+ Add Module</option>
+                            {MODULE_TYPES.map(type => (
+                              <option key={type.id} value={type.id}>{type.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-4">
-                {config.layout.map((pane, pIdx) => (
-                  <div key={pane.id} className="bg-slate-900/50 border border-slate-800 rounded-2xl overflow-hidden">
-                    <div className="p-4 bg-slate-800/30 flex items-center justify-between border-b border-slate-800">
-                      <div className="flex items-center gap-4">
-                        <GripVertical size={20} className="text-slate-600" />
-                        <span className="font-bold text-slate-300">Pane #{pIdx + 1}</span>
-                        <div className="flex items-center gap-2">
-                          <label className="text-xs text-slate-500 uppercase font-bold">Size (Flex):</label>
-                          <input 
-                            type="number"
-                            value={pane.flex}
-                            onChange={(e) => {
-                              const newLayout = [...config.layout];
-                              newLayout[pIdx].flex = parseInt(e.target.value) || 1;
-                              setConfig({ ...config, layout: newLayout });
-                            }}
-                            className="w-16 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-indigo-500"
-                          />
-                        </div>
-                      </div>
-                      <button onClick={() => removePane(pane.id)} className="text-slate-500 hover:text-red-400 transition-colors">
-                        <Trash2 size={18} />
-                      </button>
-                    </div>
-                    <div className="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {pane.modules.map((mod, mIdx) => (
-                        <div key={mIdx} className="bg-slate-950 border border-slate-800 rounded-xl p-4 relative group">
-                          <div className="flex items-center gap-3 mb-2">
-                            <span className="text-2xl">{MODULE_TYPES.find(t => t.id === mod.type)?.icon}</span>
-                            <span className="font-bold text-slate-200 capitalize">{mod.type.replace('_', ' ')}</span>
-                          </div>
-                          <button 
-                            onClick={() => removeModuleFromPane(pane.id, mIdx)}
-                            className="absolute top-4 right-4 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      ))}
-                      
-                      <div className="relative group">
-                        <select 
-                          value=""
-                          onChange={(e) => addModuleToPane(pane.id, e.target.value)}
-                          className="w-full h-full min-h-[80px] bg-slate-900/50 border-2 border-dashed border-slate-800 hover:border-indigo-500/50 rounded-xl flex items-center justify-center text-slate-500 hover:text-indigo-400 transition-all cursor-pointer appearance-none px-4 text-center font-medium"
-                        >
-                          <option value="" disabled>+ Add Module</option>
-                          {MODULE_TYPES.map(type => (
-                            <option key={type.id} value={type.id}>{type.label}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
+              <div className="w-full lg:w-80 shrink-0">
+                <div className="sticky top-8">
+                  <div className="flex items-center gap-2 mb-4 text-slate-400">
+                    <Info size={16} />
+                    <span className="text-xs font-bold uppercase tracking-wider">Live Layout Preview</span>
                   </div>
-                ))}
+                  <MirrorPreview config={config} />
+                </div>
               </div>
             </div>
           )}
@@ -465,7 +494,42 @@ function App() {
 
               {/* Home Assistant */}
               <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
-                ...
+                <div className="flex items-center gap-3 mb-6">
+                  <Monitor size={24} className="text-indigo-400" />
+                  <h2 className="text-lg font-semibold text-white">Home Assistant</h2>
+                </div>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Instance URL</label>
+                    <input 
+                      type="text"
+                      placeholder="http://homeassistant.local:8123"
+                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'home_assistant')?.config.url || ''}
+                      onChange={(e) => updateIntegrationConfig('home_assistant', 'url', e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Long-Lived Access Token</label>
+                    <input 
+                      type="password"
+                      placeholder="Paste HA Token"
+                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'home_assistant')?.config.token || ''}
+                      onChange={(e) => updateIntegrationConfig('home_assistant', 'token', e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Entity IDs (comma separated)</label>
+                    <input 
+                      type="text"
+                      placeholder="light.living_room, sensor.temp"
+                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'home_assistant')?.config.entities?.join(', ') || ''}
+                      onChange={(e) => updateIntegrationConfig('home_assistant', 'entities', e.target.value.split(',').map(s => s.trim()))}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
+                    />
+                  </div>
+                </div>
               </section>
 
               {/* Google Calendar */}
@@ -475,42 +539,27 @@ function App() {
                   <h2 className="text-lg font-semibold text-white">Google Calendar</h2>
                 </div>
                 <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Client ID</label>
-                    <input 
-                      type="text"
-                      placeholder="Enter Google Client ID"
-                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'calendar')?.config.clientId || ''}
-                      onChange={(e) => updateIntegrationConfig('calendar', 'clientId', e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Client Secret</label>
-                    <input 
-                      type="password"
-                      placeholder="Enter Google Client Secret"
-                      value={config.layout.flatMap(p => p.modules).find(m => m.type === 'calendar')?.config.clientSecret || ''}
-                      onChange={(e) => updateIntegrationConfig('calendar', 'clientSecret', e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  
-                  <div className="pt-2">
-                    <button 
-                      onClick={connectGoogle}
-                      className={`w-full flex items-center justify-center gap-2 p-3 rounded-xl font-bold transition-all ${
-                        calAuthStatus ? 'bg-green-500/10 text-green-500 border border-green-500/20' : 'bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-500/10'
-                      }`}
-                    >
-                      {calAuthStatus ? '✓ Google Calendar Connected' : 'Connect Google Calendar'}
-                    </button>
-                    {calAuthStatus && (
-                      <p className="text-[10px] text-slate-500 mt-2 text-center uppercase tracking-tighter">
-                        To change account, delete tokens.json on the Pi and reconnect.
+                  {deviceFlow ? (
+                    <div className="bg-indigo-600/10 border border-indigo-500/30 rounded-xl p-6 text-center animate-pulse">
+                      <div className="text-xs text-indigo-400 uppercase font-bold mb-2">Authorize this device</div>
+                      <div className="text-3xl font-mono font-black text-white tracking-widest mb-4">{deviceFlow.user_code}</div>
+                      <p className="text-sm text-slate-300 mb-4">
+                        Go to <a href={deviceFlow.verification_url} target="_blank" className="text-indigo-400 underline font-bold">{deviceFlow.verification_url}</a> and enter the code.
                       </p>
-                    )}
-                  </div>
+                      <div className="text-[10px] text-slate-500 uppercase tracking-widest">Waiting for login...</div>
+                    </div>
+                  ) : (
+                    <div className="pt-2">
+                      <button 
+                        onClick={connectGoogle}
+                        className={`w-full flex items-center justify-center gap-2 p-4 rounded-xl font-bold transition-all ${
+                          calAuthStatus ? 'bg-green-500/10 text-green-500 border border-green-500/20' : 'bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-500/10'
+                        }`}
+                      >
+                        {calAuthStatus ? '✓ Google Calendar Connected' : 'Login with Google'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </section>
             </div>
