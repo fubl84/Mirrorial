@@ -1,46 +1,55 @@
 #!/bin/bash
 
-# Mirrorial - Flutter Display Build Script
+# Mirrorial - Flutter Display Build Script (Optimized)
 set -e
 
 PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 FLUTTER_SDK_DIR="$HOME/flutter"
 FLUTTER_BIN="$FLUTTER_SDK_DIR/bin/flutter"
 
+# CRITICAL: Redirect temp folders away from RAM-disk (/tmp) to the SD card
+export TMPDIR="$HOME/.mirrorial_tmp"
+export PUB_CACHE="$HOME/.pub-cache"
+mkdir -p "$TMPDIR"
+mkdir -p "$PUB_CACHE"
+
 echo "🏗️ Preparing to build Mirrorial Display..."
 
-# 1. Install Flutter SDK if missing or broken
-SHOULD_INSTALL=false
-if [ ! -f "$FLUTTER_BIN" ]; then
-    SHOULD_INSTALL=true
-else
-    # Check if the binary actually runs (detect Exec format error)
-    if ! "$FLUTTER_BIN" --version > /dev/null 2>&1; then
-        echo "⚠️ Existing Flutter SDK is broken or wrong architecture. Removing..."
-        rm -rf "$FLUTTER_SDK_DIR"
-        SHOULD_INSTALL=true
-    fi
-fi
-
-if [ "$SHOULD_INSTALL" = true ]; then
-    echo "📥 Installing Flutter SDK via official Git clone (ARM64 compatible)..."
+# 1. Install or Update Flutter SDK
+if [ ! -d "$FLUTTER_SDK_DIR/.git" ]; then
+    echo "📥 Installing Flutter SDK (One-time setup)..."
+    rm -rf "$FLUTTER_SDK_DIR" # Clear any broken non-git folders
     git clone https://github.com/flutter/flutter.git -b stable "$FLUTTER_SDK_DIR"
-    
-    echo "⚙️ Initializing Flutter artifacts..."
-    "$FLUTTER_BIN" --version
+else
+    echo "🔄 Flutter SDK exists. Checking for updates..."
+    cd "$FLUTTER_SDK_DIR"
+    # Detect architecture/corruption. If broken, reset.
+    if ! bin/flutter --version > /dev/null 2>&1; then
+        echo "⚠️ SDK corrupted or wrong architecture. Performing hard reset..."
+        git clean -xfd
+        git checkout .
+    else
+        # Just a quick pull to keep it current
+        git pull origin stable
+    fi
+    cd "$PROJECT_ROOT"
 fi
 
 # 2. Build the Flutter Bundle
 echo "🛠️ Building Flutter bundle..."
 cd "$PROJECT_ROOT/display_app"
 
+# Ensure we use our SD-card cache for pub
 "$FLUTTER_BIN" pub get
 "$FLUTTER_BIN" build bundle
 
-# 3. Prepare the directory for flutter-pi
+# 3. Organize bundle
 echo "📁 Organizing bundle..."
 rm -rf "$PROJECT_ROOT/display_app/bundle"
 cp -r "$PROJECT_ROOT/display_app/build/flutter_assets" "$PROJECT_ROOT/display_app/bundle"
+
+# 4. Cleanup
+rm -rf "$TMPDIR/*"
 
 echo "✅ Build complete!"
 echo "🔄 Restarting display service..."

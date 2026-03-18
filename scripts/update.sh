@@ -6,6 +6,12 @@ PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 FLUTTER_BIN="$HOME/flutter/bin/flutter"
 FORCE=false
 
+# Redirect temp folders to SD card
+export TMPDIR="$HOME/.mirrorial_tmp"
+export PUB_CACHE="$HOME/.pub-cache"
+mkdir -p "$TMPDIR"
+mkdir -p "$PUB_CACHE"
+
 if [[ "$1" == "-f" || "$1" == "--force" ]]; then FORCE=true; fi
 
 # Helper: Check if directory A has files newer than file B
