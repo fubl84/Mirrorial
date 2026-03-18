@@ -76,52 +76,43 @@ app.post('/api/system/:command', (req, res) => {
     });
 });
 
-// API: Google Calendar Handshake
-app.get('/api/auth/google/url', async (req, res) => {
+// Google OAuth2 Config (Built-in for Mirrorial)
+const MIRRORIAL_CLIENT_ID = 'your-mirrorial-client-id.apps.googleusercontent.com'; // Replace with a real one or keep as is for user-provided flow
+
+// API: Google Calendar Device Flow
+app.get('/api/auth/google/device/start', async (req, res) => {
     try {
-        const config = await fs.readJson(CONFIG_PATH);
-        const cal = config.layout.flatMap(p => p.modules).find(m => m.type === 'calendar')?.config;
-        
-        if (!cal || !cal.clientId || !cal.clientSecret) {
-            return res.status(400).json({ error: 'Google Client ID/Secret not configured in layout.' });
-        }
-
-        const oauth2Client = new OAuth2Client(
-            cal.clientId,
-            cal.clientSecret,
-            `http://${req.hostname}:3000/api/auth/google/callback`
-        );
-
-        const url = oauth2Client.generateAuthUrl({
-            access_type: 'offline',
-            scope: ['https://www.googleapis.com/auth/calendar.readonly'],
-            prompt: 'consent'
+        const response = await axios.post('https://oauth2.googleapis.com/device/code', {
+            client_id: MIRRORIAL_CLIENT_ID,
+            scope: 'https://www.googleapis.com/auth/calendar.readonly'
         });
-
-        res.json({ url });
+        res.json(response.data);
     } catch (err) {
-        res.status(500).json({ error: 'Failed to generate auth URL', details: err.message });
+        res.status(500).json({ error: 'Failed to start device flow', details: err.message });
     }
 });
 
-app.get('/api/auth/google/callback', async (req, res) => {
+app.post('/api/auth/google/device/poll', async (req, res) => {
     try {
-        const { code } = req.query;
-        const config = await fs.readJson(CONFIG_PATH);
-        const cal = config.layout.flatMap(p => p.modules).find(m => m.type === 'calendar')?.config;
+        const { device_code } = req.body;
+        const response = await axios.post('https://oauth2.googleapis.com/token', {
+            client_id: MIRRORIAL_CLIENT_ID,
+            device_code,
+            grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
+        });
 
-        const oauth2Client = new OAuth2Client(
-            cal.clientId,
-            cal.clientSecret,
-            `http://${req.hostname}:3000/api/auth/google/callback`
-        );
-
-        const { tokens } = await oauth2Client.getToken(code);
-        await fs.writeJson(TOKENS_PATH, tokens);
-
-        res.send('<h1>Authentication Successful!</h1><p>You can close this window and return to the Mirrorial Dashboard.</p>');
+        if (response.data.access_token) {
+            await fs.writeJson(TOKENS_PATH, response.data);
+            res.json({ success: true });
+        } else {
+            res.json({ success: false, status: response.data.error });
+        }
     } catch (err) {
-        res.status(500).send(`Authentication Failed: ${err.message}`);
+        // Axios throws on 4xx, which Google uses for "pending"
+        if (err.response && err.response.data.error === 'authorization_pending') {
+            return res.json({ success: false, status: 'pending' });
+        }
+        res.status(500).json({ error: 'Polling failed', details: err.message });
     }
 });
 
