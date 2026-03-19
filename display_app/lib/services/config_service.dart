@@ -30,9 +30,18 @@ class ConfigService {
 }
 
 final configServiceProvider = Provider<ConfigService>((ref) {
-  // On the Pi, Mirrorial runs in a predictable folder structure
-  // The config is in the parent directory or root
-  return ConfigService('../config.json');
+  // Try to find the config in common locations
+  String path = '../config.json';
+  if (!File(path).existsSync()) {
+    // If not in parent, check current dir (happens in some dev envs)
+    path = 'config.json';
+  }
+  if (!File(path).existsSync()) {
+    // Mac Dev fallback: try to look up 2 levels if running from build folder
+    path = '../../config.json';
+  }
+  
+  return ConfigService(path);
 });
 
 final configStreamProvider = StreamProvider<Map<String, dynamic>>((ref) {
