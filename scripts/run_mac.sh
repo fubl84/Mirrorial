@@ -14,6 +14,7 @@ cd "$PROJECT_ROOT/backend"
 npm install
 node index.js &
 BACKEND_PID=$!
+sleep 2 # Give backend a moment to start
 
 # 2. Start Remote UI (in background)
 echo "🌐 Starting Remote UI Dev Server..."
@@ -25,6 +26,13 @@ UI_PID=$!
 # 3. Start Flutter Display (Desktop Mode)
 echo "🎨 Starting Flutter Display..."
 cd "$PROJECT_ROOT/display_app"
+
+# Initialize macOS support if missing
+if [ ! -d "macos" ]; then
+    echo "🏗️ Initializing macOS desktop support..."
+    flutter create --platforms=macos .
+fi
+
 flutter pub get
 flutter run -d macos
 
