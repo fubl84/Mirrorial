@@ -42,10 +42,19 @@ class ConfigService {
 }
 
 final configServiceProvider = Provider<ConfigService>((ref) {
-  // Try to find the config in common locations
+  // Use path from environment if provided (passed via --dart-define in run_mac.sh)
+  const envPath = String.fromEnvironment('LOCAL_CONFIG_PATH');
+
+  if (envPath.isNotEmpty) {
+    print('📍 [ConfigService] Using environment path: $envPath');
+    return ConfigService(envPath);
+  }
+
+  // Fallback to searching common locations (for Pi production)
   String path = '../config.json';
   print('🔍 [ConfigService] Searching for config.json...');
-  
+...
+
   if (!File(path).existsSync()) {
     print('   -> Not at $path, checking root...');
     path = 'config.json';

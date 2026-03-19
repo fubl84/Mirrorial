@@ -45,7 +45,8 @@ if [ ! -d "macos" ]; then
 fi
 
 flutter pub get
-flutter run -d macos
+# Pass the absolute path to the config file so the app can find it outside the sandbox
+flutter run -d macos --dart-define=LOCAL_CONFIG_PATH="$PROJECT_ROOT/config.json"
 
 # Cleanup on exit
 trap "kill $BACKEND_PID $UI_PID" EXIT
