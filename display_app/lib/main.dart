@@ -22,6 +22,22 @@ class MirrorialApp extends ConsumerWidget {
 
     return configAsync.when(
       data: (config) {
+        if (config.isEmpty) {
+          return const MaterialApp(
+            debugShowCheckedModeBanner: false,
+            home: Scaffold(
+              backgroundColor: Colors.black,
+              body: Center(
+                child: Text(
+                  'Mirrorial Engine Active\n\nNo modules configured.\nUse the Remote UI to add panes.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white24, fontSize: 14),
+                ),
+              ),
+            ),
+          );
+        }
+
         final rotation = (config['system']?['rotation'] as num?)?.toDouble() ?? 0.0;
         final theme = config['theme'] ?? {};
         
@@ -66,12 +82,29 @@ class MirrorialApp extends ConsumerWidget {
         );
       },
       loading: () => const MaterialApp(
-        home: Scaffold(backgroundColor: Colors.black),
-      ),
-      error: (e, st) => MaterialApp(
+        debugShowCheckedModeBanner: false,
         home: Scaffold(
           backgroundColor: Colors.black,
-          body: Center(child: Text('Fatal Error: $e')),
+          body: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                CircularProgressIndicator(color: Colors.white12),
+                SizedBox(height: 24),
+                Text('MIRRORIAL\nConnecting to Display Engine...', 
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white12, fontSize: 10, letterSpacing: 2)
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      error: (e, st) => MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: Scaffold(
+          backgroundColor: Colors.black,
+          body: Center(child: Text('Fatal Error: $e', style: const TextStyle(color: Colors.redAccent))),
         ),
       ),
     );

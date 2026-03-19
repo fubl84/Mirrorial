@@ -8,6 +8,11 @@ PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
 echo "🍏 Starting Mirrorial Development Environment on Mac..."
 
+# 0. Cleanup old processes
+echo "🧹 Cleaning up old processes on port 3000 and 5173..."
+lsof -ti:3000 | xargs kill -9 2>/dev/null || true
+lsof -ti:5173 | xargs kill -9 2>/dev/null || true
+
 # 1. Start Backend (in background)
 echo "📦 Starting Backend API..."
 cd "$PROJECT_ROOT/backend"

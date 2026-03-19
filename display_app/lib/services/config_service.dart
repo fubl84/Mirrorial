@@ -11,20 +11,32 @@ class ConfigService {
 
   Stream<Map<String, dynamic>> watchConfig() async* {
     final file = File(configPath);
+    print('📂 [ConfigService] Watching: ${file.absolute.path}');
+    
     if (await file.exists()) {
+      print('✅ [ConfigService] Found config. Reading...');
       yield jsonDecode(await file.readAsString());
+    } else {
+      print('⚠️ [ConfigService] Config file not found at ${file.absolute.path}');
+      // Yield an empty map so the app doesn't hang in loading state
+      yield {}; 
     }
 
-    final watcher = FileWatcher(configPath);
-    await for (final event in watcher.events) {
-      if (event.type == ChangeType.MODIFY) {
-        try {
-          final content = await file.readAsString();
-          yield jsonDecode(content);
-        } catch (e) {
-          print('Error reading config: $e');
+    try {
+      final watcher = FileWatcher(configPath);
+      await for (final event in watcher.events) {
+        if (event.type == ChangeType.MODIFY) {
+          print('🔄 [ConfigService] Config changed on disk. Reloading...');
+          try {
+            final content = await file.readAsString();
+            yield jsonDecode(content);
+          } catch (e) {
+            print('❌ [ConfigService] Error parsing config: $e');
+          }
         }
       }
+    } catch (e) {
+      print('❌ [ConfigService] Watcher failed: $e');
     }
   }
 }
@@ -32,14 +44,20 @@ class ConfigService {
 final configServiceProvider = Provider<ConfigService>((ref) {
   // Try to find the config in common locations
   String path = '../config.json';
+  print('🔍 [ConfigService] Searching for config.json...');
+  
   if (!File(path).existsSync()) {
-    // If not in parent, check current dir (happens in some dev envs)
+    print('   -> Not at $path, checking root...');
     path = 'config.json';
   }
+  
   if (!File(path).existsSync()) {
-    // Mac Dev fallback: try to look up 2 levels if running from build folder
+    print('   -> Not at $path, checking parent root...');
     path = '../../config.json';
   }
+  
+  final finalPath = File(path).absolute.path;
+  print('📍 [ConfigService] Final path resolved to: $finalPath');
   
   return ConfigService(path);
 });
