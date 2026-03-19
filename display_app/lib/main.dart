@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'services/config_service.dart';
 import 'services/event_bus.dart';
 import 'widgets/flex_grid.dart';
@@ -33,18 +34,21 @@ class MirrorialApp extends ConsumerWidget {
         final secondaryColor = parseColor(theme['secondaryColor'] ?? '#888888');
         final accentColor = parseColor(theme['accentColor'] ?? '#00BCD4');
         final fontSizeBase = (theme['fontSizeBase'] as num?)?.toDouble() ?? 16.0;
+        final fontFamily = theme['fontFamily'] ?? 'Roboto';
 
         return MaterialApp(
           debugShowCheckedModeBanner: false,
           theme: ThemeData(
             brightness: Brightness.dark,
             scaffoldBackgroundColor: Colors.black,
-            fontFamily: theme['fontFamily'] ?? 'Roboto',
-            textTheme: TextTheme(
-              displayLarge: TextStyle(color: primaryColor, fontSize: fontSizeBase * 4, fontWeight: FontWeight.bold),
-              bodyLarge: TextStyle(color: primaryColor, fontSize: fontSizeBase),
-              bodyMedium: TextStyle(color: secondaryColor, fontSize: fontSizeBase * 0.8),
-              titleLarge: TextStyle(color: accentColor, fontSize: fontSizeBase * 1.2, fontWeight: FontWeight.bold),
+            textTheme: GoogleFonts.getTextTheme(
+              fontFamily,
+              TextTheme(
+                displayLarge: TextStyle(color: primaryColor, fontSize: fontSizeBase * 4, fontWeight: FontWeight.bold),
+                bodyLarge: TextStyle(color: primaryColor, fontSize: fontSizeBase),
+                bodyMedium: TextStyle(color: secondaryColor, fontSize: fontSizeBase * 0.8),
+                titleLarge: TextStyle(color: accentColor, fontSize: fontSizeBase * 1.2, fontWeight: FontWeight.bold),
+              ),
             ),
             iconTheme: IconThemeData(color: accentColor),
           ),
