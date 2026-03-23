@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../services/config_service.dart';
+import '../layout/layout_helpers.dart';
 
 class HAEntity {
   final String entityId;
@@ -36,15 +37,15 @@ class HANotifier extends StateNotifier<Map<String, HAEntity>> {
     if (config == null) return;
 
     // Find HA config
-    Map? haConfig;
-    for (var pane in config['layout']) {
-      for (var mod in pane['modules']) {
-        if (mod['type'] == 'home_assistant') {
-          haConfig = mod['config'];
-          break;
-        }
+    final modules = getAllModules(config);
+    Map<String, dynamic>? haModule;
+    for (final mod in modules) {
+      if (mod['type'] == 'home_assistant') {
+        haModule = mod;
+        break;
       }
     }
+    final haConfig = haModule?['config'] as Map?;
 
     final url = haConfig?['url'];
     final token = haConfig?['token'];

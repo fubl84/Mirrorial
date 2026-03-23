@@ -1,30 +1,27 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:mirrorial_display/main.dart';
+import 'package:mirrorial_display/services/display_preferences.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  test('display preferences default to English and 24h', () {
+    expect(resolveDisplayLocale(null), 'en');
+    expect(resolveUse24HourFormat(null, null), true);
+  });
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  test('address-like locations are only allowed for useful destinations', () {
+    expect(shouldAllowAddressLikeLocation('Schottmüllerstr. 15, Hamburg', null), false);
+    expect(shouldAllowAddressLikeLocation('UKE hospital, Martinistrasse 52, Hamburg', null), true);
+    expect(
+      shouldAllowAddressLikeLocation(
+        'Karolinenstrasse 8, Hamburg',
+        {
+          'services': {
+            'context': {
+              'usefulLocationWhitelist': ['karolinenstrasse'],
+            },
+          },
+        },
+      ),
+      true,
+    );
   });
 }

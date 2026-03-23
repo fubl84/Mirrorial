@@ -1,107 +1,111 @@
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
-import '../services/config_service.dart';
+import 'config_service.dart';
 
 class CalendarEvent {
+  final String id;
   final String title;
   final DateTime start;
+  final DateTime end;
   final bool isAllDay;
+  final bool isRecurring;
+  final String calendarSummary;
+  final String location;
+  final String calendarColor;
 
-  CalendarEvent({required this.title, required this.start, required this.isAllDay});
+  CalendarEvent({
+    required this.id,
+    required this.title,
+    required this.start,
+    required this.end,
+    required this.isAllDay,
+    required this.isRecurring,
+    required this.calendarSummary,
+    required this.location,
+    required this.calendarColor,
+  });
+
+  factory CalendarEvent.fromJson(Map<String, dynamic> json) {
+    final isAllDay = json['isAllDay'] ?? false;
+    return CalendarEvent(
+      id: json['id'] ?? '',
+      title: json['title'] ?? '(No title)',
+      start: _parseCalendarDate(json['start'], isAllDay: isAllDay),
+      end: _parseCalendarDate(json['end'] ?? json['start'], isAllDay: isAllDay),
+      isAllDay: isAllDay,
+      isRecurring: json['isRecurring'] ?? false,
+      calendarSummary: json['calendarSummary'] ?? '',
+      location: json['location'] ?? '',
+      calendarColor: json['calendarColor'] ?? '',
+    );
+  }
+}
+
+DateTime _parseCalendarDate(dynamic rawValue, {required bool isAllDay}) {
+  final parsed = DateTime.parse(rawValue.toString());
+  if (isAllDay) {
+    return DateTime(parsed.year, parsed.month, parsed.day);
+  }
+
+  return parsed.isUtc ? parsed.toLocal() : parsed.toLocal();
+}
+
+String _resolveBackendBaseUrl(Map<String, dynamic>? config) {
+  const envBaseUrl = String.fromEnvironment('DISPLAY_API_BASE');
+  final configuredBaseUrl = config?['system']?['backendUrl'] as String?;
+  final baseUrl = (configuredBaseUrl != null && configuredBaseUrl.trim().isNotEmpty)
+      ? configuredBaseUrl.trim()
+      : (envBaseUrl.isNotEmpty ? envBaseUrl : 'http://127.0.0.1:3000');
+
+  return baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
 }
 
 class CalendarService {
   final Ref ref;
-  String? _accessToken;
 
   CalendarService(this.ref);
 
   Future<List<CalendarEvent>> fetchEvents() async {
-    final tokensFile = File('../tokens.json');
-    if (!await tokensFile.exists()) return [];
+    final config = ref.read(configStreamProvider).value;
+    final baseUrl = _resolveBackendBaseUrl(config);
+    final response = await http.get(Uri.parse('$baseUrl/api/display/calendar/events'));
 
-    final tokens = jsonDecode(await tokensFile.readAsString());
-    final configAsync = ref.read(configStreamProvider);
-    final config = configAsync.value;
-    if (config == null) return [];
-
-    // Find Calendar Config
-    Map? calConfig;
-    for (var pane in config['layout']) {
-      for (var mod in pane['modules']) {
-        if (mod['type'] == 'calendar') {
-          calConfig = mod['config'];
-          break;
-        }
-      }
+    if (response.statusCode != 200) {
+      return [];
     }
 
-    if (calConfig == null) return [];
-
-    if (_accessToken == null) {
-      await _refreshToken(tokens, calConfig);
-    }
-
-    final now = DateTime.now().toUtc().toIso8601String();
-    final url = 'https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=$now&maxResults=5&orderBy=startTime&singleEvents=true';
-
-    try {
-      final response = await http.get(
-        Uri.parse(url),
-        headers: {'Authorization': 'Bearer $_accessToken'},
-      );
-
-      if (response.statusCode == 401) {
-        // Token expired, refresh and retry once
-        await _refreshToken(tokens, calConfig);
-        return fetchEvents();
-      }
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final List items = data['items'] ?? [];
-        return items.map((item) {
-          final start = item['start'];
-          final dateStr = start['dateTime'] ?? start['date'];
-          return CalendarEvent(
-            title: item['summary'] ?? '(No Title)',
-            start: DateTime.parse(dateStr),
-            isAllDay: start['dateTime'] == null,
-          );
-        }).toList();
-      }
-    } catch (e) {
-      print('Calendar Fetch Error: $e');
-    }
-
-    return [];
+    final payload = jsonDecode(response.body) as Map<String, dynamic>;
+    final items = payload['events'] as List? ?? [];
+    return items
+        .whereType<Map>()
+        .map((item) => CalendarEvent.fromJson(item.cast<String, dynamic>()))
+        .toList();
   }
 
-  Future<void> _refreshToken(Map tokens, Map config) async {
-    final url = 'https://oauth2.googleapis.com/token';
-    final response = await http.post(Uri.parse(url), body: {
-      'client_id': config['clientId'],
-      'client_secret': config['clientSecret'],
-      'refresh_token': tokens['refresh_token'],
-      'grant_type': 'refresh_token',
-    });
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      _accessToken = data['access_token'];
+  Stream<List<CalendarEvent>> watchEvents() async* {
+    while (true) {
+      try {
+        yield await fetchEvents();
+      } catch (_) {
+        yield [];
+      }
+      await Future<void>.delayed(const Duration(minutes: 5));
     }
   }
 }
 
 final calendarServiceProvider = Provider((ref) => CalendarService(ref));
 
-final calendarEventsProvider = FutureProvider.autoDispose<List<CalendarEvent>>((ref) async {
+final calendarEventsProvider = StreamProvider.autoDispose<List<CalendarEvent>>((ref) {
   final service = ref.watch(calendarServiceProvider);
-  // Refresh every 15 minutes
-  final timer = Stream.periodic(const Duration(minutes: 15));
-  ref.onDispose(() {}); // Placeholder
+  return service.watchEvents();
+});
 
-  return service.fetchEvents();
+final calendarNowProvider = StreamProvider.autoDispose<DateTime>((ref) async* {
+  yield DateTime.now();
+  while (true) {
+    await Future<void>.delayed(const Duration(minutes: 1));
+    yield DateTime.now();
+  }
 });

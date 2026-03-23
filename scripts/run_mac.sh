@@ -5,6 +5,7 @@
 # This script starts all components for local development.
 
 PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+FLUTTER_BIN="$PROJECT_ROOT/scripts/flutterw.sh"
 
 echo "🍏 Starting Mirrorial Development Environment on Mac..."
 
@@ -41,12 +42,12 @@ cd "$PROJECT_ROOT/display_app"
 # Initialize macOS support if missing
 if [ ! -d "macos" ]; then
     echo "🏗️ Initializing macOS desktop support..."
-    flutter create --platforms=macos .
+    "$FLUTTER_BIN" create --platforms=macos .
 fi
 
-flutter pub get
+"$FLUTTER_BIN" pub get
 # Pass the absolute path to the config file so the app can find it outside the sandbox
-flutter run -d macos --dart-define=LOCAL_CONFIG_PATH="$PROJECT_ROOT/config.json"
+"$FLUTTER_BIN" run -d macos --dart-define=LOCAL_CONFIG_PATH="$PROJECT_ROOT/config.json"
 
 # Cleanup on exit
 trap "kill $BACKEND_PID $UI_PID" EXIT

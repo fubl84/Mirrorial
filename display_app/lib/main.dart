@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:http/http.dart' as http;
+import 'package:intl/date_symbol_data_local.dart';
 import 'services/config_service.dart';
 import 'services/event_bus.dart';
 import 'widgets/flex_grid.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting('en');
+  await initializeDateFormatting('de');
   runApp(
     const ProviderScope(
       child: MirrorialApp(),
@@ -73,6 +78,7 @@ class MirrorialApp extends ConsumerWidget {
               quarterTurns: (rotation / 90).round() % 4,
               child: Stack(
                 children: [
+                  _DisplayStatusReporter(config: config),
                   const FlexGrid(),
                   const AlertOverlay(),
                 ],
@@ -111,6 +117,51 @@ class MirrorialApp extends ConsumerWidget {
   }
 }
 
+class _DisplayStatusReporter extends StatefulWidget {
+  final Map<String, dynamic> config;
+
+  const _DisplayStatusReporter({required this.config});
+
+  @override
+  State<_DisplayStatusReporter> createState() => _DisplayStatusReporterState();
+}
+
+class _DisplayStatusReporterState extends State<_DisplayStatusReporter> {
+  String? _lastSignature;
+
+  @override
+  Widget build(BuildContext context) {
+    final mediaQuery = MediaQuery.of(context);
+    final size = mediaQuery.size;
+    final signature = '${size.width.round()}x${size.height.round()}@${mediaQuery.devicePixelRatio.toStringAsFixed(2)}';
+
+    if (_lastSignature != signature) {
+      _lastSignature = signature;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _reportStatus(size, mediaQuery.devicePixelRatio);
+      });
+    }
+
+    return const SizedBox.shrink();
+  }
+
+  Future<void> _reportStatus(Size size, double devicePixelRatio) async {
+    final backendUrl = (widget.config['system']?['backendUrl'] as String?)?.trim();
+    final baseUrl = (backendUrl != null && backendUrl.isNotEmpty) ? backendUrl : 'http://127.0.0.1:3000';
+    final normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+
+    try {
+      await http.post(
+        Uri.parse('$normalizedBaseUrl/api/display/status'),
+        headers: {'content-type': 'application/json'},
+        body: '{"width":${size.width.round()},"height":${size.height.round()},"devicePixelRatio":$devicePixelRatio}',
+      );
+    } catch (_) {
+      // Best-effort only. The display keeps working if the status endpoint is unavailable.
+    }
+  }
+}
+
 class AlertOverlay extends ConsumerWidget {
   const AlertOverlay({super.key});
 
@@ -127,9 +178,9 @@ class AlertOverlay extends ConsumerWidget {
         duration: const Duration(milliseconds: 500),
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
         decoration: BoxDecoration(
-          color: _getAlertColor(event.type).withOpacity(0.2),
+          color: _getAlertColor(event.type).withValues(alpha: 0.2),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _getAlertColor(event.type).withOpacity(0.5), width: 2),
+          border: Border.all(color: _getAlertColor(event.type).withValues(alpha: 0.5), width: 2),
         ),
         child: Row(
           children: [

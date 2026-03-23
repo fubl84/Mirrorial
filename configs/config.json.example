@@ -4,6 +4,10 @@
     "rotation": 0,
     "units": "metric",
     "timezone": "UTC",
+    "displayLocale": "en",
+    "timeFormat": "24h",
+    "previewResolution": "auto",
+    "backendUrl": "http://127.0.0.1:3000",
     "power": {
       "autoShutdownEnabled": false,
       "autoShutdownTime": "23:00"
@@ -16,53 +20,124 @@
     "fontSizeBase": 16,
     "fontFamily": "Roboto"
   },
-  "layout": [
-    {
-      "id": "top_left",
-      "flex": 1,
-      "modules": [
-        {
-          "type": "clock",
-          "config": {
-            "showSeconds": false,
-            "format": "24h"
-          }
-        }
-      ]
+  "services": {
+    "google": {
+      "clientId": "",
+      "redirectUri": "http://localhost:3000/api/auth/google/callback",
+      "selectedCalendarIds": []
     },
-    {
-      "id": "top_right",
-      "flex": 1,
-      "modules": [
-        {
-          "type": "weather",
-          "config": {
-            "apiKey": "",
-            "location": "Berlin"
-          }
-        }
-      ]
+    "context": {
+      "refreshHours": 3,
+      "tripLookaheadDays": 14,
+      "usefulLocationWhitelist": []
     },
-    {
-      "id": "bottom",
-      "flex": 2,
-      "modules": [
-        {
-          "type": "calendar",
-          "config": {
-            "googleClientId": "",
-            "calendarIds": ["primary"]
-          }
-        },
-        {
-          "type": "home_assistant",
-          "config": {
-            "url": "http://homeassistant.local:8123",
-            "token": "",
-            "entities": ["sensor.temperature"]
-          }
-        }
-      ]
+    "llm": {
+      "enabled": false,
+      "provider": "openai",
+      "model": "gpt-5-mini",
+      "baseUrl": "",
+      "refreshHours": 3,
+      "privacyMode": "cloud-redacted",
+      "suppressRoutineRecurringEvents": true
+    },
+    "transport": {
+      "enabled": false,
+      "provider": "none",
+      "homeAirport": "",
+      "homeStation": "",
+      "refreshMinutes": 30
+    },
+    "routing": {
+      "enabled": false,
+      "provider": "none",
+      "baseUrl": "",
+      "profile": "driving-car",
+      "refreshMinutes": 30
     }
-  ]
+  },
+  "gridLayout": {
+    "template": "portrait_focus",
+    "columns": 4,
+    "rows": 8,
+    "gap": 16,
+    "modules": [
+      {
+        "id": "clock_1",
+        "type": "clock",
+        "x": 0,
+        "y": 0,
+        "w": 2,
+        "h": 2,
+        "align": "start",
+        "config": {
+          "showSeconds": false,
+          "format": "24h"
+        }
+      },
+      {
+        "id": "weather_1",
+        "type": "weather",
+        "x": 2,
+        "y": 0,
+        "w": 2,
+        "h": 3,
+        "align": "stretch",
+        "config": {
+          "provider": "open-meteo",
+          "lat": 52.52,
+          "lon": 13.41,
+          "refreshMinutes": 30,
+          "location": "Berlin",
+          "displayName": "Berlin",
+          "city": "Berlin",
+          "postalCode": "",
+          "country": "Germany"
+        }
+      },
+      {
+        "id": "brief_1",
+        "type": "daily_brief",
+        "x": 0,
+        "y": 2,
+        "w": 4,
+        "h": 3,
+        "align": "stretch",
+        "config": {
+          "maxItems": 3,
+          "pageSeconds": 10
+        }
+      },
+      {
+        "id": "calendar_1",
+        "type": "calendar",
+        "x": 0,
+        "y": 5,
+        "w": 2,
+        "h": 3,
+        "align": "stretch",
+        "config": {
+          "maxItems": 5,
+          "viewMode": "list",
+          "daysToShow": 4,
+          "calendarColors": {}
+        }
+      },
+      {
+        "id": "ha_1",
+        "type": "home_assistant",
+        "x": 2,
+        "y": 5,
+        "w": 2,
+        "h": 3,
+        "align": "stretch",
+        "config": {
+          "url": "http://homeassistant.local:8123",
+          "token": "",
+          "entities": [
+            "sensor.temperature"
+          ]
+        }
+      }
+    ]
+  }
 }

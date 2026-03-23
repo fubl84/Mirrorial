@@ -3,7 +3,7 @@
 # Mirrorial - Intelligent Update Script
 set -e
 PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
-FLUTTER_BIN="$HOME/flutter/bin/flutter"
+FLUTTER_BIN="$PROJECT_ROOT/scripts/flutterw.sh"
 FORCE=false
 
 # Redirect temp folders to SD card
@@ -55,8 +55,8 @@ fi
 # 3. Flutter Display (Validate SDK First)
 echo "🏗️ Checking Flutter SDK..."
 SDK_VALID=true
-if [ ! -f "$FLUTTER_BIN" ]; then
-    SDK_VALID=false
+if [ ! -x "$FLUTTER_BIN" ]; then
+  SDK_VALID=false
 elif ! "$FLUTTER_BIN" --version > /dev/null 2>&1; then
     echo "⚠️ Flutter SDK is broken (Exec format error?)."
     SDK_VALID=false
