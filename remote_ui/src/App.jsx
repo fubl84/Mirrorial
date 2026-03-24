@@ -116,6 +116,24 @@ const PREVIEW_RESOLUTION_PRESETS = {
   '2560x1440': { label: 'Landscape QHD', width: 2560, height: 1440 },
 };
 
+const CONFIG_TABS = [
+  { id: 'display', label: 'System', icon: Monitor, eyebrow: 'Core', description: 'Display, device status, and mirror behavior.' },
+  { id: 'household', label: 'Household', icon: Users, eyebrow: 'People', description: 'Members, calendars, places, and routines.' },
+  { id: 'layout', label: 'Layout Editor', icon: Layout, eyebrow: 'Canvas', description: 'Grid templates, module placement, and sizing.' },
+  { id: 'styling', label: 'Styling', icon: Settings, eyebrow: 'Theme', description: 'Visual language, colors, and contextual rules.' },
+  { id: 'integrations', label: 'Integrations', icon: Cloud, eyebrow: 'Inputs', description: 'Connected services, sync, and module sources.' },
+  { id: 'debug', label: 'Debug', icon: Info, eyebrow: 'Inspect', description: 'Daily Brief internals and troubleshooting data.' },
+];
+
+const INTEGRATION_SECTIONS = [
+  { id: 'google', label: 'Google Calendar', eyebrow: 'Account', description: 'OAuth credentials and account connection.' },
+  { id: 'weather', label: 'Weather', eyebrow: 'Feed', description: 'Location, provider, and refresh behavior.' },
+  { id: 'llm', label: 'LLM Context', eyebrow: 'AI', description: 'Provider setup, refresh cadence, and privacy mode.' },
+  { id: 'transport', label: 'Transport', eyebrow: 'Travel', description: 'Flight and station enrichment sources.' },
+  { id: 'routing', label: 'Routing', eyebrow: 'Travel Time', description: 'Route estimates and provider credentials.' },
+  { id: 'module_inputs', label: 'Module Inputs', eyebrow: 'Modules', description: 'Separate inputs for Home Assistant, Calendar, and Daily Brief.' },
+];
+
 const defaultModuleConfig = (type) => {
   switch (type) {
     case 'weather':
@@ -217,6 +235,7 @@ function App() {
   const [googleCalendars, setGoogleCalendars] = useState([]);
   const [selectedCalendarIds, setSelectedCalendarIds] = useState([]);
   const [calendarSaving, setCalendarSaving] = useState(false);
+  const [activeIntegrationSection, setActiveIntegrationSection] = useState('google');
   const [selectedLayoutModuleId, setSelectedLayoutModuleId] = useState(null);
   const [displayStatus, setDisplayStatus] = useState(null);
   const [dailyBriefDebug, setDailyBriefDebug] = useState(null);
@@ -656,49 +675,80 @@ function App() {
       ? { width: displayStatus.width, height: displayStatus.height, label: 'Live device' }
       : PREVIEW_RESOLUTION_PRESETS['1080x1920'])
     : PREVIEW_RESOLUTION_PRESETS[configuredPreviewResolution] || PREVIEW_RESOLUTION_PRESETS['1080x1920'];
+  const activeTabMeta = CONFIG_TABS.find((tab) => tab.id === activeTab) || CONFIG_TABS[0];
+  const activeIntegrationMeta = INTEGRATION_SECTIONS.find((section) => section.id === activeIntegrationSection) || INTEGRATION_SECTIONS[0];
+  const currentYear = new Date().getFullYear();
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200">
-      <div className="max-w-7xl mx-auto p-4 md:p-8">
-        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/20">M</div>
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight leading-none">Mirrorial</h1>
-              <span className="text-xs text-slate-500 uppercase tracking-widest font-bold">Remote OS v1.1</span>
-            </div>
-          </div>
-          <button
-            onClick={saveConfig}
-            disabled={saving}
-            className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2.5 rounded-xl font-semibold transition-all shadow-lg shadow-indigo-500/10 active:scale-95"
-          >
-            <Save size={18} /> {saving ? 'Saving...' : 'Save Changes'}
-          </button>
-        </header>
+      <div className="w-full p-4 md:p-8">
+        <div className="grid gap-8 xl:grid-cols-[280px,minmax(0,1fr)]">
+          <aside className="space-y-4">
+            <section className="rounded-[28px] border border-slate-800 bg-slate-900/70 p-5 shadow-2xl shadow-slate-950/40">
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 via-orange-500 to-rose-500 font-bold text-slate-950 shadow-lg shadow-orange-900/30">M</div>
+                <div>
+                  <h1 className="text-2xl font-bold tracking-tight text-white">Mirrorial</h1>
+                  <div className="text-xs font-bold uppercase tracking-[0.28em] text-amber-300/80">Configuration Console</div>
+                </div>
+              </div>
+              <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">{activeTabMeta.eyebrow}</div>
+                <div className="mt-2 text-lg font-semibold text-white">{activeTabMeta.label}</div>
+                <div className="mt-1 text-sm text-slate-400">{activeTabMeta.description}</div>
+              </div>
+            </section>
 
-        <div className="flex gap-1 p-1 bg-slate-900/50 rounded-2xl border border-slate-800 mb-8 overflow-x-auto no-scrollbar">
-          {[
-            { id: 'display', label: 'System', icon: Monitor },
-            { id: 'household', label: 'Household', icon: Users },
-            { id: 'layout', label: 'Layout Editor', icon: Layout },
-            { id: 'styling', label: 'Styling', icon: Settings },
-            { id: 'integrations', label: 'Integrations', icon: Cloud },
-            { id: 'debug', label: 'Debug', icon: Info },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-medium transition-all whitespace-nowrap ${
-                activeTab === tab.id ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-              }`}
-            >
-              <tab.icon size={18} /> {tab.label}
-            </button>
-          ))}
-        </div>
+            <nav className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              {CONFIG_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`rounded-[24px] border p-4 text-left transition-all ${
+                    activeTab === tab.id
+                      ? 'border-amber-400/50 bg-gradient-to-br from-amber-500/20 via-orange-500/10 to-slate-900 text-white shadow-lg shadow-orange-950/30'
+                      : 'border-slate-800 bg-slate-900/60 text-slate-300 hover:border-slate-700 hover:bg-slate-900'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={`mt-0.5 flex h-10 w-10 items-center justify-center rounded-2xl ${activeTab === tab.id ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-300'}`}>
+                      <tab.icon size={18} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-bold uppercase tracking-[0.24em] text-slate-500">{tab.eyebrow}</div>
+                      <div className="mt-1 text-sm font-semibold">{tab.label}</div>
+                      <div className="mt-1 text-xs text-slate-400">{tab.description}</div>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </nav>
+          </aside>
 
-        <main className="space-y-8">
+          <div className="space-y-8">
+            <header className="rounded-[32px] border border-slate-800 bg-[radial-gradient(circle_at_top_left,_rgba(251,191,36,0.16),_rgba(15,23,42,0.94)_45%,_rgba(2,6,23,1)_100%)] p-6 md:p-8 shadow-2xl shadow-slate-950/40">
+              <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+                <div className="max-w-2xl">
+                  <div className="text-xs font-bold uppercase tracking-[0.3em] text-amber-300/80">{activeTabMeta.eyebrow}</div>
+                  <h2 className="mt-3 text-3xl font-bold tracking-tight text-white md:text-4xl">{activeTabMeta.label}</h2>
+                  <p className="mt-3 text-sm text-slate-300 md:text-base">{activeTabMeta.description}</p>
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3 text-sm text-slate-400">
+                    Changes persist to mirror services and module configuration.
+                  </div>
+                  <button
+                    onClick={saveConfig}
+                    disabled={saving}
+                    className="flex items-center justify-center gap-2 rounded-2xl bg-amber-400 px-6 py-3 font-semibold text-slate-950 transition-all hover:bg-amber-300 active:scale-95 disabled:opacity-70"
+                  >
+                    <Save size={18} /> {saving ? 'Saving...' : 'Save Changes'}
+                  </button>
+                </div>
+              </div>
+            </header>
+
+            <main className="space-y-8">
           {activeTab === 'display' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
@@ -1594,581 +1644,654 @@ function App() {
           )}
 
           {activeTab === 'integrations' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
-                <div className="flex items-center gap-3 mb-6">
-                  <Cloud size={24} className="text-red-400" />
-                  <h2 className="text-lg font-semibold text-white">Google Calendar</h2>
+            <div className="grid gap-6 xl:grid-cols-[260px,minmax(0,1fr)]">
+              <aside className="rounded-[28px] border border-slate-800 bg-slate-900/60 p-5">
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                  <div className="text-xs font-bold uppercase tracking-[0.24em] text-slate-500">{activeIntegrationMeta.eyebrow}</div>
+                  <div className="mt-2 text-lg font-semibold text-white">{activeIntegrationMeta.label}</div>
+                  <div className="mt-1 text-sm text-slate-400">{activeIntegrationMeta.description}</div>
                 </div>
-
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">OAuth Client ID</label>
-                    <input
-                      type="text"
-                      value={googleConfig.clientId}
-                      onChange={(event) => updateServiceConfig('google', 'clientId', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">OAuth Client Secret</label>
-                    <input
-                      type="password"
-                      placeholder={googleConfig.clientSecretConfigured ? 'Stored securely. Enter to replace.' : 'Paste client secret'}
-                      value={googleConfig.clientSecret || ''}
-                      onChange={(event) => updateServiceConfig('google', 'clientSecret', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Redirect URI</label>
-                    <input
-                      type="text"
-                      value={googleConfig.redirectUri}
-                      onChange={(event) => updateServiceConfig('google', 'redirectUri', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-
-                  <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 text-sm text-slate-300 space-y-2">
-                    <div className="font-semibold text-white">Connection status</div>
-                    <div>{googleStatus?.connected ? `Connected as ${googleStatus.email || 'Google account'}` : 'No Google account connected yet.'}</div>
-                    <div className="text-xs text-slate-500">Save the OAuth settings before starting the popup flow.</div>
-                  </div>
-
-                  <div className="flex gap-3">
-                    <button onClick={connectGoogle} className="flex-1 bg-red-600 hover:bg-red-500 text-white rounded-xl px-4 py-3 font-semibold transition-all">
-                      Connect Google
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  {INTEGRATION_SECTIONS.map((section) => (
+                    <button
+                      key={section.id}
+                      onClick={() => setActiveIntegrationSection(section.id)}
+                      className={`rounded-2xl border p-4 text-left transition-all ${
+                        activeIntegrationSection === section.id
+                          ? 'border-amber-400/50 bg-amber-400/10 text-white'
+                          : 'border-slate-800 bg-slate-950/70 text-slate-300 hover:border-slate-700 hover:bg-slate-950'
+                      }`}
+                    >
+                      <div className="text-[11px] font-bold uppercase tracking-[0.24em] text-slate-500">{section.eyebrow}</div>
+                      <div className="mt-1 text-sm font-semibold">{section.label}</div>
+                      <div className="mt-1 text-xs text-slate-400">{section.description}</div>
                     </button>
-                    <button onClick={disconnectGoogle} className="bg-slate-800 hover:bg-slate-700 text-white rounded-xl px-4 py-3 font-semibold transition-all">
-                      Disconnect
-                    </button>
-                  </div>
+                  ))}
                 </div>
-              </section>
+              </aside>
 
-              <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
-                <div className="flex items-center gap-3 mb-6">
-                  <Layout size={24} className="text-indigo-400" />
-                  <h2 className="text-lg font-semibold text-white">Calendar Sync</h2>
-                </div>
-
-                {googleCalendars.length === 0 ? (
-                  <div className="text-sm text-slate-400">Connect Google first to fetch calendars.</div>
-                ) : (
-                  <div className="space-y-3">
-                    {googleCalendars.map((calendar) => (
-                      <div key={calendar.id} className="flex items-center justify-between gap-3 p-3 rounded-xl border border-slate-800 bg-slate-950/70">
-                        <div className="flex items-center gap-3 flex-1">
-                          <div
-                            className="w-3 h-10 rounded-full"
-                            style={{ backgroundColor: calendarModuleConfig.calendarColors?.[calendar.id] || calendar.backgroundColor || '#f472b6' }}
-                          />
-                          <div className="flex-1">
-                            <div className="font-medium text-white">{calendar.summary}</div>
-                            <div className="text-xs text-slate-500">{calendar.primary ? 'Primary calendar' : calendar.accessRole}</div>
-                          </div>
-                        </div>
-                        <input
-                          type="color"
-                          value={calendarModuleConfig.calendarColors?.[calendar.id] || calendar.backgroundColor || '#f472b6'}
-                          onChange={(event) => updateModuleConfig('calendar', 'calendarColors', {
-                            ...(calendarModuleConfig.calendarColors || {}),
-                            [calendar.id]: event.target.value,
-                          })}
-                          className="w-10 h-10 rounded-lg cursor-pointer bg-transparent border-none"
-                        />
-                        <input
-                          type="checkbox"
-                          checked={selectedCalendarIds.includes(calendar.id)}
-                          onChange={(event) => {
-                            if (event.target.checked) {
-                              setSelectedCalendarIds((current) => Array.from(new Set([...current, calendar.id])));
-                            } else {
-                              setSelectedCalendarIds((current) => current.filter((id) => id !== calendar.id));
-                            }
-                          }}
-                        />
+              <div className="space-y-6">
+                {activeIntegrationSection === 'google' && (
+                  <div className="grid grid-cols-1 2xl:grid-cols-2 gap-6">
+                    <section className="bg-slate-900/50 border border-slate-800 rounded-[28px] p-6">
+                      <div className="flex items-center gap-3 mb-6">
+                        <Cloud size={24} className="text-red-400" />
+                        <h2 className="text-lg font-semibold text-white">Google Account</h2>
                       </div>
-                    ))}
-                    <button onClick={saveCalendarSelection} disabled={calendarSaving} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-3 font-semibold transition-all">
-                      {calendarSaving ? 'Saving...' : 'Save Calendar Selection'}
-                    </button>
+
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">OAuth Client ID</label>
+                          <input
+                            type="text"
+                            value={googleConfig.clientId}
+                            onChange={(event) => updateServiceConfig('google', 'clientId', event.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">OAuth Client Secret</label>
+                          <input
+                            type="password"
+                            placeholder={googleConfig.clientSecretConfigured ? 'Stored securely. Enter to replace.' : 'Paste client secret'}
+                            value={googleConfig.clientSecret || ''}
+                            onChange={(event) => updateServiceConfig('google', 'clientSecret', event.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Redirect URI</label>
+                          <input
+                            type="text"
+                            value={googleConfig.redirectUri}
+                            onChange={(event) => updateServiceConfig('google', 'redirectUri', event.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          />
+                        </div>
+
+                        <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 text-sm text-slate-300 space-y-2">
+                          <div className="font-semibold text-white">Connection status</div>
+                          <div>{googleStatus?.connected ? `Connected as ${googleStatus.email || 'Google account'}` : 'No Google account connected yet.'}</div>
+                          <div className="text-xs text-slate-500">Save the OAuth settings before starting the popup flow.</div>
+                        </div>
+
+                        <div className="flex gap-3">
+                          <button onClick={connectGoogle} className="flex-1 rounded-xl bg-red-600 px-4 py-3 font-semibold text-white transition-all hover:bg-red-500">
+                            Connect Google
+                          </button>
+                          <button onClick={disconnectGoogle} className="rounded-xl bg-slate-800 px-4 py-3 font-semibold text-white transition-all hover:bg-slate-700">
+                            Disconnect
+                          </button>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="bg-slate-900/50 border border-slate-800 rounded-[28px] p-6">
+                      <div className="flex items-center gap-3 mb-6">
+                        <Layout size={24} className="text-indigo-400" />
+                        <h2 className="text-lg font-semibold text-white">Calendar Sync</h2>
+                      </div>
+
+                      {googleCalendars.length === 0 ? (
+                        <div className="text-sm text-slate-400">Connect Google first to fetch calendars.</div>
+                      ) : (
+                        <div className="space-y-3">
+                          {googleCalendars.map((calendar) => (
+                            <div key={calendar.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                              <div className="flex flex-1 items-center gap-3">
+                                <div
+                                  className="h-10 w-3 rounded-full"
+                                  style={{ backgroundColor: calendarModuleConfig.calendarColors?.[calendar.id] || calendar.backgroundColor || '#f472b6' }}
+                                />
+                                <div className="flex-1">
+                                  <div className="font-medium text-white">{calendar.summary}</div>
+                                  <div className="text-xs text-slate-500">{calendar.primary ? 'Primary calendar' : calendar.accessRole}</div>
+                                </div>
+                              </div>
+                              <input
+                                type="color"
+                                value={calendarModuleConfig.calendarColors?.[calendar.id] || calendar.backgroundColor || '#f472b6'}
+                                onChange={(event) => updateModuleConfig('calendar', 'calendarColors', {
+                                  ...(calendarModuleConfig.calendarColors || {}),
+                                  [calendar.id]: event.target.value,
+                                })}
+                                className="h-10 w-10 cursor-pointer rounded-lg border-none bg-transparent"
+                              />
+                              <input
+                                type="checkbox"
+                                checked={selectedCalendarIds.includes(calendar.id)}
+                                onChange={(event) => {
+                                  if (event.target.checked) {
+                                    setSelectedCalendarIds((current) => Array.from(new Set([...current, calendar.id])));
+                                  } else {
+                                    setSelectedCalendarIds((current) => current.filter((id) => id !== calendar.id));
+                                  }
+                                }}
+                              />
+                            </div>
+                          ))}
+                          <button onClick={saveCalendarSelection} disabled={calendarSaving} className="w-full rounded-xl bg-amber-400 px-4 py-3 font-semibold text-slate-950 transition-all hover:bg-amber-300 disabled:opacity-70">
+                            {calendarSaving ? 'Saving...' : 'Save Calendar Selection'}
+                          </button>
+                        </div>
+                      )}
+                    </section>
                   </div>
                 )}
-              </section>
 
-              <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
-                <div className="flex items-center gap-3 mb-6">
-                  <Cloud size={24} className="text-sky-400" />
-                  <h2 className="text-lg font-semibold text-white">Weather Integration</h2>
-                </div>
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Display Name</label>
-                      <input
-                        type="text"
-                        value={weatherConfig.displayName || ''}
-                        onChange={(event) => updateModuleConfig('weather', 'displayName', event.target.value)}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                      />
+                {activeIntegrationSection === 'weather' && (
+                  <section className="bg-slate-900/50 border border-slate-800 rounded-[28px] p-6">
+                    <div className="flex items-center gap-3 mb-6">
+                      <Cloud size={24} className="text-sky-400" />
+                      <h2 className="text-lg font-semibold text-white">Weather Integration</h2>
                     </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">City</label>
-                      <input
-                        type="text"
-                        value={weatherConfig.city || ''}
-                        onChange={(event) => updateModuleConfig('weather', 'city', event.target.value)}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Postal Code</label>
-                      <input
-                        type="text"
-                        value={weatherConfig.postalCode || ''}
-                        onChange={(event) => updateModuleConfig('weather', 'postalCode', event.target.value)}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Country</label>
-                      <input
-                        type="text"
-                        value={weatherConfig.country || ''}
-                        onChange={(event) => updateModuleConfig('weather', 'country', event.target.value)}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                      />
-                    </div>
-                  </div>
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Display Name</label>
+                          <input
+                            type="text"
+                            value={weatherConfig.displayName || ''}
+                            onChange={(event) => updateModuleConfig('weather', 'displayName', event.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">City</label>
+                          <input
+                            type="text"
+                            value={weatherConfig.city || ''}
+                            onChange={(event) => updateModuleConfig('weather', 'city', event.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Postal Code</label>
+                          <input
+                            type="text"
+                            value={weatherConfig.postalCode || ''}
+                            onChange={(event) => updateModuleConfig('weather', 'postalCode', event.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Country</label>
+                          <input
+                            type="text"
+                            value={weatherConfig.country || ''}
+                            onChange={(event) => updateModuleConfig('weather', 'country', event.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          />
+                        </div>
+                      </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Service Provider</label>
-                    <select
-                      value={weatherConfig.provider || 'open-meteo'}
-                      onChange={(event) => updateModuleConfig('weather', 'provider', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    >
-                      <option value="open-meteo">Open-Meteo</option>
-                      <option value="openweathermap">OpenWeatherMap</option>
-                    </select>
-                  </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Service Provider</label>
+                        <select
+                          value={weatherConfig.provider || 'open-meteo'}
+                          onChange={(event) => updateModuleConfig('weather', 'provider', event.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                        >
+                          <option value="open-meteo">Open-Meteo</option>
+                          <option value="openweathermap">OpenWeatherMap</option>
+                        </select>
+                      </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Refresh Interval</label>
-                    <input
-                      type="number"
-                      min="10"
-                      max="180"
-                      value={weatherConfig.refreshMinutes || 30}
-                      onChange={(event) => updateModuleConfig('weather', 'refreshMinutes', parseInt(event.target.value || '30', 10))}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                    <div className="text-xs text-slate-500 mt-2">
-                      Weather refresh uses a single request for current conditions, short-term changes, and daily forecast. `30` minutes is a good default for free providers.
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Refresh Interval</label>
+                        <input
+                          type="number"
+                          min="10"
+                          max="180"
+                          value={weatherConfig.refreshMinutes || 30}
+                          onChange={(event) => updateModuleConfig('weather', 'refreshMinutes', parseInt(event.target.value || '30', 10))}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                        />
+                        <div className="mt-2 text-xs text-slate-500">
+                          Weather refresh uses a single request for current conditions, short-term changes, and daily forecast. `30` minutes is a good default for free providers.
+                        </div>
+                      </div>
+
+                      {weatherConfig.provider === 'openweathermap' ? (
+                        <>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">API Key</label>
+                            <input
+                              type="password"
+                              value={weatherConfig.apiKey || ''}
+                              onChange={(event) => updateModuleConfig('weather', 'apiKey', event.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider Query</label>
+                            <input
+                              type="text"
+                              value={weatherConfig.location || ''}
+                              onChange={(event) => updateModuleConfig('weather', 'location', event.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Latitude</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={weatherConfig.lat || 52.52}
+                              onChange={(event) => updateModuleConfig('weather', 'lat', parseFloat(event.target.value))}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Longitude</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={weatherConfig.lon || 13.41}
+                              onChange={(event) => updateModuleConfig('weather', 'lon', parseFloat(event.target.value))}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                            />
+                          </div>
+                        </div>
+                      )}
+                      <div className="text-xs text-slate-500">
+                        For Open-Meteo you can either provide exact latitude/longitude or just fill city, postal code, and country and let the display geocode the place.
+                      </div>
                     </div>
-                  </div>
+                  </section>
+                )}
 
-                  {weatherConfig.provider === 'openweathermap' ? (
-                    <>
+                {activeIntegrationSection === 'llm' && (
+                  <section className="bg-slate-900/50 border border-slate-800 rounded-[28px] p-6">
+                    <div className="flex items-center gap-3 mb-6">
+                      <Settings size={24} className="text-emerald-400" />
+                      <h2 className="text-lg font-semibold text-white">LLM Context Worker</h2>
+                    </div>
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-800/30 p-3">
+                        <div>
+                          <div className="text-sm font-semibold text-white">Enable LLM Analysis</div>
+                          <div className="text-[10px] font-bold uppercase text-slate-500">Deterministic context stays active regardless</div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={llmConfig.enabled}
+                          onChange={(event) => updateServiceConfig('llm', 'enabled', event.target.checked)}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider</label>
+                        <select
+                          value={llmConfig.provider}
+                          onChange={(event) => updateServiceConfig('llm', 'provider', event.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                        >
+                          <option value="openai">OpenAI</option>
+                          <option value="anthropic">Anthropic</option>
+                          <option value="google">Google</option>
+                          <option value="custom">Custom / local</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Model</label>
+                        <input
+                          type="text"
+                          value={llmConfig.model}
+                          onChange={(event) => updateServiceConfig('llm', 'model', event.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Base URL</label>
+                        <input
+                          type="text"
+                          placeholder="Optional. Required for custom/local providers."
+                          value={llmConfig.baseUrl || ''}
+                          onChange={(event) => updateServiceConfig('llm', 'baseUrl', event.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                        />
+                      </div>
                       <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">API Key</label>
                         <input
                           type="password"
-                          value={weatherConfig.apiKey || ''}
-                          onChange={(event) => updateModuleConfig('weather', 'apiKey', event.target.value)}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
+                          placeholder={llmConfig.apiKeyConfigured ? 'Stored securely. Enter to replace.' : 'Paste API key'}
+                          value={llmConfig.apiKey || ''}
+                          onChange={(event) => updateServiceConfig('llm', 'apiKey', event.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Refresh Hours</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="12"
+                            value={llmConfig.refreshHours}
+                            onChange={(event) => updateServiceConfig('llm', 'refreshHours', parseInt(event.target.value || '3', 10))}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Privacy Mode</label>
+                          <select
+                            value={llmConfig.privacyMode}
+                            onChange={(event) => updateServiceConfig('llm', 'privacyMode', event.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          >
+                            <option value="off">Off</option>
+                            <option value="local-only">Local only</option>
+                            <option value="cloud-redacted">Cloud redacted</option>
+                            <option value="full">Full context</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-800/30 p-3">
+                        <div>
+                          <div className="text-sm font-semibold text-white">Suppress routine recurring events</div>
+                          <div className="text-[10px] font-bold uppercase text-slate-500">Hide recurring classes, lessons, and similar noise from Daily Brief unless explicitly relevant</div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={llmConfig.suppressRoutineRecurringEvents !== false}
+                          onChange={(event) => updateServiceConfig('llm', 'suppressRoutineRecurringEvents', event.target.checked)}
+                          className="h-5 w-5 rounded border-slate-700 bg-slate-900 text-amber-400 focus:ring-amber-400"
+                        />
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+                {activeIntegrationSection === 'transport' && (
+                  <section className="bg-slate-900/50 border border-slate-800 rounded-[28px] p-6">
+                    <div className="flex items-center gap-3 mb-6">
+                      <Cloud size={24} className="text-amber-400" />
+                      <h2 className="text-lg font-semibold text-white">Transport Enrichment</h2>
+                    </div>
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-800/30 p-3">
+                        <div>
+                          <div className="text-sm font-semibold text-white">Enable transport lookups</div>
+                          <div className="text-[10px] font-bold uppercase text-slate-500">Deterministic parsing stays active regardless</div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={transportConfig.enabled}
+                          onChange={(event) => updateServiceConfig('transport', 'enabled', event.target.checked)}
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider Query</label>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider</label>
+                        <select
+                          value={transportConfig.provider}
+                          onChange={(event) => updateServiceConfig('transport', 'provider', event.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                        >
+                          <option value="none">None</option>
+                          <option value="aviationstack">Aviationstack</option>
+                          <option value="aviationapi">AviationAPI</option>
+                          <option value="custom">Custom</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider API Key</label>
+                        <input
+                          type="password"
+                          placeholder={transportConfig.apiKeyConfigured ? 'Stored securely. Enter to replace.' : 'Paste provider API key'}
+                          value={transportConfig.apiKey || ''}
+                          onChange={(event) => updateServiceConfig('transport', 'apiKey', event.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Home Airport</label>
+                          <input
+                            type="text"
+                            placeholder="HAM"
+                            value={transportConfig.homeAirport || ''}
+                            onChange={(event) => updateServiceConfig('transport', 'homeAirport', event.target.value.toUpperCase())}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Home Station</label>
+                          <input
+                            type="text"
+                            placeholder="Hamburg Hbf"
+                            value={transportConfig.homeStation || ''}
+                            onChange={(event) => updateServiceConfig('transport', 'homeStation', event.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Refresh Minutes</label>
+                        <input
+                          type="number"
+                          min="5"
+                          max="120"
+                          value={transportConfig.refreshMinutes}
+                          onChange={(event) => updateServiceConfig('transport', 'refreshMinutes', parseInt(event.target.value || '30', 10))}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                        />
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+                {activeIntegrationSection === 'routing' && (
+                  <section className="bg-slate-900/50 border border-slate-800 rounded-[28px] p-6">
+                    <div className="flex items-center gap-3 mb-6">
+                      <Cloud size={24} className="text-cyan-400" />
+                      <h2 className="text-lg font-semibold text-white">Routing & Travel Time</h2>
+                    </div>
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-800/30 p-3">
+                        <div>
+                          <div className="text-sm font-semibold text-white">Enable route estimates</div>
+                          <div className="text-[10px] font-bold uppercase text-slate-500">Falls back to local estimates if no provider is configured</div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={routingConfig.enabled}
+                          onChange={(event) => updateServiceConfig('routing', 'enabled', event.target.checked)}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider</label>
+                        <select
+                          value={routingConfig.provider}
+                          onChange={(event) => updateServiceConfig('routing', 'provider', event.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                        >
+                          <option value="none">None</option>
+                          <option value="openrouteservice">OpenRouteService</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Base URL</label>
                         <input
                           type="text"
-                          value={weatherConfig.location || ''}
-                          onChange={(event) => updateModuleConfig('weather', 'location', event.target.value)}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                        />
-                      </div>
-                    </>
-                  ) : (
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Latitude</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={weatherConfig.lat || 52.52}
-                          onChange={(event) => updateModuleConfig('weather', 'lat', parseFloat(event.target.value))}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
+                          placeholder="Optional. Defaults to https://api.openrouteservice.org"
+                          value={routingConfig.baseUrl || ''}
+                          onChange={(event) => updateServiceConfig('routing', 'baseUrl', event.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Longitude</label>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">API Key</label>
                         <input
-                          type="number"
-                          step="0.01"
-                          value={weatherConfig.lon || 13.41}
-                          onChange={(event) => updateModuleConfig('weather', 'lon', parseFloat(event.target.value))}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
+                          type="password"
+                          placeholder={routingConfig.apiKeyConfigured ? 'Stored securely. Enter to replace.' : 'Paste provider API key'}
+                          value={routingConfig.apiKey || ''}
+                          onChange={(event) => updateServiceConfig('routing', 'apiKey', event.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
                         />
                       </div>
-                    </div>
-                  )}
-                  <div className="text-xs text-slate-500">
-                    For Open-Meteo you can either provide exact latitude/longitude or just fill city/postal code/country and let the display geocode the place.
-                  </div>
-                </div>
-              </section>
-
-              <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
-                <div className="flex items-center gap-3 mb-6">
-                  <Settings size={24} className="text-emerald-400" />
-                  <h2 className="text-lg font-semibold text-white">LLM Context Worker</h2>
-                </div>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between p-3 bg-slate-800/30 rounded-xl border border-slate-800">
-                    <div>
-                      <div className="text-sm font-semibold text-white">Enable LLM Analysis</div>
-                      <div className="text-[10px] text-slate-500 uppercase font-bold">Deterministic context stays active regardless</div>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={llmConfig.enabled}
-                      onChange={(event) => updateServiceConfig('llm', 'enabled', event.target.checked)}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider</label>
-                    <select
-                      value={llmConfig.provider}
-                      onChange={(event) => updateServiceConfig('llm', 'provider', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    >
-                      <option value="openai">OpenAI</option>
-                      <option value="anthropic">Anthropic</option>
-                      <option value="google">Google</option>
-                      <option value="custom">Custom / local</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Model</label>
-                    <input
-                      type="text"
-                      value={llmConfig.model}
-                      onChange={(event) => updateServiceConfig('llm', 'model', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Base URL</label>
-                    <input
-                      type="text"
-                      placeholder="Optional. Required for custom/local providers."
-                      value={llmConfig.baseUrl || ''}
-                      onChange={(event) => updateServiceConfig('llm', 'baseUrl', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">API Key</label>
-                    <input
-                      type="password"
-                      placeholder={llmConfig.apiKeyConfigured ? 'Stored securely. Enter to replace.' : 'Paste API key'}
-                      value={llmConfig.apiKey || ''}
-                      onChange={(event) => updateServiceConfig('llm', 'apiKey', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Refresh Hours</label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="12"
-                        value={llmConfig.refreshHours}
-                        onChange={(event) => updateServiceConfig('llm', 'refreshHours', parseInt(event.target.value || '3', 10))}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Privacy Mode</label>
-                      <select
-                        value={llmConfig.privacyMode}
-                        onChange={(event) => updateServiceConfig('llm', 'privacyMode', event.target.value)}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                      >
-                        <option value="off">Off</option>
-                        <option value="local-only">Local only</option>
-                        <option value="cloud-redacted">Cloud redacted</option>
-                        <option value="full">Full context</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-slate-800/30 rounded-xl border border-slate-800">
-                    <div>
-                      <div className="text-sm font-semibold text-white">Suppress routine recurring events</div>
-                      <div className="text-[10px] text-slate-500 uppercase font-bold">Hide recurring classes, lessons, and similar noise from Daily Brief unless explicitly relevant</div>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={llmConfig.suppressRoutineRecurringEvents !== false}
-                      onChange={(event) => updateServiceConfig('llm', 'suppressRoutineRecurringEvents', event.target.checked)}
-                      className="h-5 w-5 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
-                    />
-                  </div>
-                </div>
-              </section>
-
-              <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
-                <div className="flex items-center gap-3 mb-6">
-                  <Cloud size={24} className="text-amber-400" />
-                  <h2 className="text-lg font-semibold text-white">Transport Enrichment</h2>
-                </div>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between p-3 bg-slate-800/30 rounded-xl border border-slate-800">
-                    <div>
-                      <div className="text-sm font-semibold text-white">Enable transport lookups</div>
-                      <div className="text-[10px] text-slate-500 uppercase font-bold">Deterministic parsing stays active regardless</div>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={transportConfig.enabled}
-                      onChange={(event) => updateServiceConfig('transport', 'enabled', event.target.checked)}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider</label>
-                    <select
-                      value={transportConfig.provider}
-                      onChange={(event) => updateServiceConfig('transport', 'provider', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    >
-                      <option value="none">None</option>
-                      <option value="aviationstack">Aviationstack</option>
-                      <option value="aviationapi">AviationAPI</option>
-                      <option value="custom">Custom</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider API Key</label>
-                    <input
-                      type="password"
-                      placeholder={transportConfig.apiKeyConfigured ? 'Stored securely. Enter to replace.' : 'Paste provider API key'}
-                      value={transportConfig.apiKey || ''}
-                      onChange={(event) => updateServiceConfig('transport', 'apiKey', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Home Airport</label>
-                      <input
-                        type="text"
-                        placeholder="HAM"
-                        value={transportConfig.homeAirport || ''}
-                        onChange={(event) => updateServiceConfig('transport', 'homeAirport', event.target.value.toUpperCase())}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Home Station</label>
-                      <input
-                        type="text"
-                        placeholder="Hamburg Hbf"
-                        value={transportConfig.homeStation || ''}
-                        onChange={(event) => updateServiceConfig('transport', 'homeStation', event.target.value)}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Refresh Minutes</label>
-                    <input
-                      type="number"
-                      min="5"
-                      max="120"
-                      value={transportConfig.refreshMinutes}
-                      onChange={(event) => updateServiceConfig('transport', 'refreshMinutes', parseInt(event.target.value || '30', 10))}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                </div>
-              </section>
-
-              <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
-                <div className="flex items-center gap-3 mb-6">
-                  <Cloud size={24} className="text-cyan-400" />
-                  <h2 className="text-lg font-semibold text-white">Routing & Travel Time</h2>
-                </div>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between p-3 bg-slate-800/30 rounded-xl border border-slate-800">
-                    <div>
-                      <div className="text-sm font-semibold text-white">Enable route estimates</div>
-                      <div className="text-[10px] text-slate-500 uppercase font-bold">Falls back to local estimates if no provider is configured</div>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={routingConfig.enabled}
-                      onChange={(event) => updateServiceConfig('routing', 'enabled', event.target.checked)}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider</label>
-                    <select
-                      value={routingConfig.provider}
-                      onChange={(event) => updateServiceConfig('routing', 'provider', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    >
-                      <option value="none">None</option>
-                      <option value="openrouteservice">OpenRouteService</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Base URL</label>
-                    <input
-                      type="text"
-                      placeholder="Optional. Defaults to https://api.openrouteservice.org"
-                      value={routingConfig.baseUrl || ''}
-                      onChange={(event) => updateServiceConfig('routing', 'baseUrl', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">API Key</label>
-                    <input
-                      type="password"
-                      placeholder={routingConfig.apiKeyConfigured ? 'Stored securely. Enter to replace.' : 'Paste provider API key'}
-                      value={routingConfig.apiKey || ''}
-                      onChange={(event) => updateServiceConfig('routing', 'apiKey', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Profile</label>
-                      <select
-                        value={routingConfig.profile || 'driving-car'}
-                        onChange={(event) => updateServiceConfig('routing', 'profile', event.target.value)}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                      >
-                        <option value="driving-car">Driving</option>
-                        <option value="cycling-regular">Cycling</option>
-                        <option value="foot-walking">Walking</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Refresh Minutes</label>
-                      <input
-                        type="number"
-                        min="5"
-                        max="120"
-                        value={routingConfig.refreshMinutes}
-                        onChange={(event) => updateServiceConfig('routing', 'refreshMinutes', parseInt(event.target.value || '30', 10))}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                        />
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Profile</label>
+                          <select
+                            value={routingConfig.profile || 'driving-car'}
+                            onChange={(event) => updateServiceConfig('routing', 'profile', event.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          >
+                            <option value="driving-car">Driving</option>
+                            <option value="cycling-regular">Cycling</option>
+                            <option value="foot-walking">Walking</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Refresh Minutes</label>
+                          <input
+                            type="number"
+                            min="5"
+                            max="120"
+                            value={routingConfig.refreshMinutes}
+                            onChange={(event) => updateServiceConfig('routing', 'refreshMinutes', parseInt(event.target.value || '30', 10))}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          />
+                        </div>
                       </div>
                     </div>
-                </div>
-              </section>
+                  </section>
+                )}
 
-              <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
-                <div className="flex items-center gap-3 mb-6">
-                  <Monitor size={24} className="text-indigo-400" />
-                  <h2 className="text-lg font-semibold text-white">Module Inputs</h2>
-                </div>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Home Assistant URL</label>
-                    <input
-                      type="text"
-                      value={homeAssistantConfig.url || ''}
-                      onChange={(event) => updateModuleConfig('home_assistant', 'url', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Home Assistant Token</label>
-                    <input
-                      type="password"
-                      value={homeAssistantConfig.token || ''}
-                      onChange={(event) => updateModuleConfig('home_assistant', 'token', event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Entities</label>
-                    <input
-                      type="text"
-                      value={homeAssistantConfig.entities?.join(', ') || ''}
-                      onChange={(event) => updateModuleConfig('home_assistant', 'entities', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Calendar Items</label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="10"
-                        value={calendarModuleConfig.maxItems || 5}
-                        onChange={(event) => updateModuleConfig('calendar', 'maxItems', parseInt(event.target.value || '5', 10))}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                      />
+                {activeIntegrationSection === 'module_inputs' && (
+                  <div className="space-y-6">
+                    <section className="rounded-[28px] border border-slate-800 bg-[linear-gradient(135deg,rgba(251,191,36,0.12),rgba(15,23,42,0.92)_40%,rgba(2,6,23,1)_100%)] p-6">
+                      <div className="text-xs font-bold uppercase tracking-[0.24em] text-amber-300/80">Modules</div>
+                      <h2 className="mt-2 text-xl font-semibold text-white">Separate module inputs</h2>
+                      <p className="mt-2 text-sm text-slate-300">
+                        Home Assistant, Calendar, and Daily Brief settings are now split into their own sections so each module has a clear boundary and a focused editing surface.
+                      </p>
+                    </section>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                      <section className="bg-slate-900/50 border border-slate-800 rounded-[28px] p-6">
+                        <div className="flex items-center gap-3 mb-6">
+                          <Monitor size={24} className="text-emerald-400" />
+                          <h2 className="text-lg font-semibold text-white">Home Assistant Input</h2>
+                        </div>
+                        <div className="space-y-4">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Home Assistant URL</label>
+                            <input
+                              type="text"
+                              value={homeAssistantConfig.url || ''}
+                              onChange={(event) => updateModuleConfig('home_assistant', 'url', event.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Home Assistant Token</label>
+                            <input
+                              type="password"
+                              value={homeAssistantConfig.token || ''}
+                              onChange={(event) => updateModuleConfig('home_assistant', 'token', event.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Entities</label>
+                            <input
+                              type="text"
+                              value={homeAssistantConfig.entities?.join(', ') || ''}
+                              onChange={(event) => updateModuleConfig('home_assistant', 'entities', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                            />
+                            <div className="mt-2 text-xs text-slate-500">Enter entity ids separated by commas.</div>
+                          </div>
+                        </div>
+                      </section>
+
+                      <section className="bg-slate-900/50 border border-slate-800 rounded-[28px] p-6">
+                        <div className="flex items-center gap-3 mb-6">
+                          <Layout size={24} className="text-indigo-400" />
+                          <h2 className="text-lg font-semibold text-white">Calendar Input</h2>
+                        </div>
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Calendar Items</label>
+                              <input
+                                type="number"
+                                min="1"
+                                max="10"
+                                value={calendarModuleConfig.maxItems || 5}
+                                onChange={(event) => updateModuleConfig('calendar', 'maxItems', parseInt(event.target.value || '5', 10))}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Days to Show</label>
+                              <select
+                                value={calendarModuleConfig.daysToShow || 4}
+                                onChange={(event) => updateModuleConfig('calendar', 'daysToShow', parseInt(event.target.value, 10))}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                              >
+                                {[1, 2, 3, 4, 5, 6, 7].map((days) => (
+                                  <option key={days} value={days}>{days === 7 ? 'Full week' : `${days} day${days === 1 ? '' : 's'}`}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Calendar View</label>
+                            <select
+                              value={calendarModuleConfig.viewMode || 'list'}
+                              onChange={(event) => updateModuleConfig('calendar', 'viewMode', event.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                            >
+                              <option value="list">Agenda list</option>
+                              <option value="day_cards">Day cards</option>
+                            </select>
+                          </div>
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 text-sm text-slate-400">
+                            Calendar source selection and color mapping stay in <span className="font-semibold text-white">Google Calendar</span>.
+                          </div>
+                        </div>
+                      </section>
                     </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Daily Brief Items</label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="5"
-                        value={dailyBriefConfig.maxItems || 3}
-                        onChange={(event) => updateModuleConfig('daily_brief', 'maxItems', parseInt(event.target.value || '3', 10))}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                      />
-                    </div>
+
+                    <section className="bg-slate-900/50 border border-slate-800 rounded-[28px] p-6">
+                      <div className="flex items-center gap-3 mb-6">
+                        <Settings size={24} className="text-amber-300" />
+                        <h2 className="text-lg font-semibold text-white">Daily Brief Input</h2>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Daily Brief Items</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="5"
+                            value={dailyBriefConfig.maxItems || 3}
+                            onChange={(event) => updateModuleConfig('daily_brief', 'maxItems', parseInt(event.target.value || '3', 10))}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Daily Brief Page Seconds</label>
+                          <input
+                            type="number"
+                            min="5"
+                            max="30"
+                            value={dailyBriefConfig.pageSeconds || 10}
+                            onChange={(event) => updateModuleConfig('daily_brief', 'pageSeconds', parseInt(event.target.value || '10', 10))}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm"
+                          />
+                        </div>
+                      </div>
+                    </section>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Daily Brief Page Seconds</label>
-                    <input
-                      type="number"
-                      min="5"
-                      max="30"
-                      value={dailyBriefConfig.pageSeconds || 10}
-                      onChange={(event) => updateModuleConfig('daily_brief', 'pageSeconds', parseInt(event.target.value || '10', 10))}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Calendar View</label>
-                      <select
-                        value={calendarModuleConfig.viewMode || 'list'}
-                        onChange={(event) => updateModuleConfig('calendar', 'viewMode', event.target.value)}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                      >
-                        <option value="list">Agenda list</option>
-                        <option value="day_cards">Day cards</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Days to Show</label>
-                      <select
-                        value={calendarModuleConfig.daysToShow || 4}
-                        onChange={(event) => updateModuleConfig('calendar', 'daysToShow', parseInt(event.target.value, 10))}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
-                      >
-                        {[1, 2, 3, 4, 5, 6, 7].map((days) => (
-                          <option key={days} value={days}>{days === 7 ? 'Full week' : `${days} day${days === 1 ? '' : 's'}`}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-              </section>
+                )}
+              </div>
             </div>
           )}
 
@@ -2241,7 +2364,13 @@ function App() {
               </section>
             </div>
           )}
-        </main>
+            </main>
+
+            <footer className="rounded-[28px] border border-slate-800 bg-slate-900/60 px-6 py-4 text-sm text-slate-400">
+              {currentYear} Christoph Seiler | Flaming Battenberg
+            </footer>
+          </div>
+        </div>
       </div>
     </div>
   );
