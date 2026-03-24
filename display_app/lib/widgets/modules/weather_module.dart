@@ -459,10 +459,11 @@ class _ForecastRow extends StatelessWidget {
         final spacing = items.length >= 6 ? 8.0 : 10.0;
         final cardWidth = (constraints.maxWidth - ((items.length - 1) * spacing)) / items.length;
         final cardHeight = constraints.maxHeight;
-        final iconSize = math.min(cardHeight * 0.28, cardWidth * 0.32).clamp(24.0, largeCards ? 40.0 : 34.0);
-        final dayFontSize = math.min(cardHeight * 0.11, cardWidth * 0.16).clamp(12.0, largeCards ? 16.0 : 14.0);
-        final highFontSize = math.min(cardHeight * 0.18, cardWidth * 0.2).clamp(18.0, largeCards ? 28.0 : 22.0);
-        final lowFontSize = math.min(cardHeight * 0.11, cardWidth * 0.14).clamp(12.0, largeCards ? 16.0 : 14.0);
+        final iconSize = math.min(cardHeight * 0.42, cardWidth * 0.7).clamp(38.0, largeCards ? 82.0 : 68.0);
+        final dayFontSize = math.min(cardHeight * 0.14, cardWidth * 0.22).clamp(15.0, largeCards ? 24.0 : 19.0);
+        final highFontSize = math.min(cardHeight * 0.2, cardWidth * 0.28).clamp(22.0, largeCards ? 34.0 : 28.0);
+        final lowFontSize = math.min(cardHeight * 0.12, cardWidth * 0.16).clamp(13.0, largeCards ? 19.0 : 16.0);
+        final verticalPadding = largeCards ? 14.0 : 12.0;
 
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -473,48 +474,49 @@ class _ForecastRow extends StatelessWidget {
             return Expanded(
               child: Container(
                 margin: EdgeInsets.only(right: index == items.length - 1 ? 0 : spacing),
-                padding: EdgeInsets.symmetric(vertical: largeCards ? 16 : 14, horizontal: largeCards ? 12 : 10),
+                padding: EdgeInsets.symmetric(vertical: verticalPadding, horizontal: largeCards ? 12 : 10),
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.045),
                   borderRadius: BorderRadius.circular(18),
                 ),
                 child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Text(
                       DateFormat('E', locale).format(item.date),
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                             fontSize: dayFontSize,
                             fontWeight: FontWeight.w600,
+                            height: 1.0,
                           ),
                     ),
-                    SizedBox(height: math.max(8, cardHeight * 0.06)),
+                    const Spacer(),
+                    _StaticWeatherGlyph(kind: item.visualKind, size: iconSize),
+                    const Spacer(),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        _StaticWeatherGlyph(kind: item.visualKind, size: iconSize),
-                        SizedBox(width: math.max(8, cardWidth * 0.05)),
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '${item.maxTemp.round()}°',
-                              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: highFontSize,
-                                    height: 1.0,
-                                  ),
-                            ),
-                            Text(
-                              '${item.minTemp.round()}°',
-                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    fontSize: lowFontSize,
-                                    height: 1.0,
-                                  ),
-                            ),
-                          ],
+                        Text(
+                          '${item.maxTemp.round()}°',
+                          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                fontSize: highFontSize,
+                                height: 1.0,
+                              ),
+                        ),
+                        SizedBox(width: math.max(4, cardWidth * 0.03)),
+                        Padding(
+                          padding: EdgeInsets.only(bottom: largeCards ? 4 : 3),
+                          child: Text(
+                            '${item.minTemp.round()}°',
+                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  fontSize: lowFontSize,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white.withValues(alpha: 0.72),
+                                  height: 1.0,
+                                ),
+                          ),
                         ),
                       ],
                     ),
