@@ -36,7 +36,13 @@ class CalendarModule extends ConsumerWidget {
 
         return LayoutBuilder(
           builder: (context, constraints) {
-            if (viewMode == 'day_cards' && density != ModuleVisualDensity.compact) {
+            final perDayWidth = constraints.maxWidth / math.max(1, _resolveDayCount(config));
+            final canUseDayCards = viewMode == 'day_cards'
+                && density != ModuleVisualDensity.compact
+                && constraints.maxHeight >= 240
+                && perDayWidth >= 130;
+
+            if (canUseDayCards) {
               return _DayCardCalendar(
                 events: events,
                 locale: locale,

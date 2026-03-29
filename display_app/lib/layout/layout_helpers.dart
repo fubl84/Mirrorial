@@ -98,7 +98,24 @@ List<Map<String, dynamic>> _flattenModules(Iterable<Map<String, dynamic>> module
 }
 
 List<Map<String, dynamic>> getAllModules(Map<String, dynamic> config) {
-  final gridModules = config['gridLayout']?['modules'];
+  final gridLayouts = config['gridLayouts'];
+  final layoutModules = <Map<String, dynamic>>[];
+
+  if (gridLayouts is Map) {
+    for (final layout in gridLayouts.values) {
+      if (layout is Map && layout['modules'] is List) {
+        layoutModules.addAll(
+          (layout['modules'] as List)
+              .whereType<Map>()
+              .map((module) => module.cast<String, dynamic>()),
+        );
+      }
+    }
+  }
+
+  final gridModules = layoutModules.isNotEmpty
+      ? layoutModules
+      : (config['gridLayout']?['modules'] as List?);
   if (gridModules is List) {
     return _flattenModules(
       gridModules.whereType<Map>().map((module) => module.cast<String, dynamic>()),
@@ -108,14 +125,19 @@ List<Map<String, dynamic>> getAllModules(Map<String, dynamic> config) {
   return [];
 }
 
-Map<String, dynamic> normalizeGridLayout(Map<String, dynamic> config) {
-  final rawGrid = config['gridLayout'];
+Map<String, dynamic> normalizeGridLayout(Map<String, dynamic> config, {String orientation = 'portrait'}) {
+  final rawGridLayouts = config['gridLayouts'];
+  final rawGrid = rawGridLayouts is Map
+      ? (rawGridLayouts[orientation] is Map
+          ? (rawGridLayouts[orientation] as Map).cast<String, dynamic>()
+          : config['gridLayout'])
+      : config['gridLayout'];
   if (rawGrid is Map) {
     return {
       'template': rawGrid['template'] ?? 'portrait_focus',
-      'columns': ((rawGrid['columns'] as num?)?.toInt() ?? 4).clamp(1, 12),
-      'rows': ((rawGrid['rows'] as num?)?.toInt() ?? 8).clamp(1, 20),
-      'gap': ((rawGrid['gap'] as num?)?.toDouble() ?? 16).clamp(0, 48),
+      'columns': ((rawGrid['columns'] as num?)?.toInt() ?? 4).clamp(1, 48),
+      'rows': ((rawGrid['rows'] as num?)?.toInt() ?? 8).clamp(1, 96),
+      'gap': ((rawGrid['gap'] as num?)?.toDouble() ?? 16).clamp(0, 64),
       'modules': (rawGrid['modules'] as List? ?? [])
           .whereType<Map>()
           .map((module) => normalizeGridModuleData(module.cast<String, dynamic>()))

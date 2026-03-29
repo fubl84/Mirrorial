@@ -92,8 +92,30 @@ const MODULE_SIZE_PRESETS = {
   },
 };
 
-const LAYOUT_TEMPLATES = {
+const GRID_ORIENTATION_PRESETS = {
+  portrait: {
+    label: 'Portrait',
+    columns: 24,
+    rows: 48,
+    gap: 8,
+    legacyColumns: 4,
+    legacyRows: 8,
+    defaultTemplate: 'portrait_focus',
+  },
+  landscape: {
+    label: 'Landscape',
+    columns: 30,
+    rows: 20,
+    gap: 8,
+    legacyColumns: 6,
+    legacyRows: 4,
+    defaultTemplate: 'landscape_dashboard',
+  },
+};
+
+const LEGACY_LAYOUT_TEMPLATES = {
   portrait_focus: {
+    orientation: 'portrait',
     label: 'Portrait Focus',
     description: 'Tall portrait mirror with weather and AI context emphasized.',
     columns: 4,
@@ -107,6 +129,7 @@ const LAYOUT_TEMPLATES = {
     ],
   },
   portrait_compact: {
+    orientation: 'portrait',
     label: 'Portrait Compact',
     description: 'Balanced portrait layout with smaller weather and tighter modules.',
     columns: 4,
@@ -120,6 +143,7 @@ const LAYOUT_TEMPLATES = {
     ],
   },
   landscape_dashboard: {
+    orientation: 'landscape',
     label: 'Landscape Dashboard',
     description: 'Wide horizontal screen with top status and side-by-side content.',
     columns: 6,
@@ -133,6 +157,35 @@ const LAYOUT_TEMPLATES = {
     ],
   },
 };
+
+const scaleTemplateModules = (modules, sourceColumns, sourceRows, targetColumns, targetRows) => (
+  (modules || []).map((module) => ({
+    ...module,
+    x: Math.round(((module.x || 0) / Math.max(1, sourceColumns)) * targetColumns),
+    y: Math.round(((module.y || 0) / Math.max(1, sourceRows)) * targetRows),
+    w: Math.max(1, Math.round(((module.w || 1) / Math.max(1, sourceColumns)) * targetColumns)),
+    h: Math.max(1, Math.round(((module.h || 1) / Math.max(1, sourceRows)) * targetRows)),
+  }))
+);
+
+const LAYOUT_TEMPLATES = Object.fromEntries(
+  Object.entries(LEGACY_LAYOUT_TEMPLATES).map(([templateId, template]) => {
+    const preset = GRID_ORIENTATION_PRESETS[template.orientation] || GRID_ORIENTATION_PRESETS.portrait;
+    return [templateId, {
+      ...template,
+      columns: preset.columns,
+      rows: preset.rows,
+      gap: preset.gap,
+      modules: scaleTemplateModules(
+        template.modules,
+        template.columns,
+        template.rows,
+        preset.columns,
+        preset.rows,
+      ),
+    }];
+  })
+);
 
 const PREVIEW_RESOLUTION_PRESETS = {
   '1080x1920': { label: 'Portrait FHD', width: 1080, height: 1920 },
@@ -380,6 +433,47 @@ const normalizeModuleSettingsDraft = (moduleSettings = {}, modules = []) => {
   return normalized;
 };
 
+const getOrientationForResolution = (resolution) => {
+  if (!resolution?.width || !resolution?.height) {
+    return null;
+  }
+
+  return resolution.width > resolution.height ? 'landscape' : 'portrait';
+};
+
+const getTemplateOrientation = (templateId) => (
+  LAYOUT_TEMPLATES[templateId]?.orientation || 'portrait'
+);
+
+const getLegacyGridPreset = (orientation = 'portrait') => GRID_ORIENTATION_PRESETS[orientation] || GRID_ORIENTATION_PRESETS.portrait;
+
+const scaleModuleToGrid = (module, sourceColumns, sourceRows, targetColumns, targetRows) => {
+  const safeSourceColumns = Math.max(1, sourceColumns || 1);
+  const safeSourceRows = Math.max(1, sourceRows || 1);
+  const safeTargetColumns = Math.max(1, targetColumns || 1);
+  const safeTargetRows = Math.max(1, targetRows || 1);
+
+  return {
+    ...module,
+    x: Math.round(((module?.x || 0) / safeSourceColumns) * safeTargetColumns),
+    y: Math.round(((module?.y || 0) / safeSourceRows) * safeTargetRows),
+    w: Math.max(1, Math.round(((module?.w || 1) / safeSourceColumns) * safeTargetColumns)),
+    h: Math.max(1, Math.round(((module?.h || 1) / safeSourceRows) * safeTargetRows)),
+  };
+};
+
+const collectGridLayoutModules = (gridLayouts = {}, fallbackGridLayout = null) => {
+  const layoutModules = Object.values(gridLayouts || {}).flatMap((layout) => (
+    Array.isArray(layout?.modules) ? layout.modules : []
+  ));
+
+  if (layoutModules.length) {
+    return layoutModules;
+  }
+
+  return Array.isArray(fallbackGridLayout?.modules) ? fallbackGridLayout.modules : [];
+};
+
 const buildRotatorChildId = (type = 'module') => `rotator_${type}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
 const createRotatorChildModule = (type = 'clock', moduleSettings = null) => ({
@@ -433,15 +527,68 @@ const defaultModuleConfig = (type, moduleSettings = null) => {
 
 const createDefaultGridLayout = (templateId = 'portrait_focus', moduleSettings = null) => {
   const template = LAYOUT_TEMPLATES[templateId] || LAYOUT_TEMPLATES.portrait_focus;
+  const preset = getLegacyGridPreset(template.orientation);
   return {
     template: templateId,
-    columns: template.columns,
-    rows: template.rows,
-    gap: 16,
+    orientation: template.orientation,
+    columns: preset.columns,
+    rows: preset.rows,
+    gap: template.gap || preset.gap,
     modules: template.modules.map((module) => ({
       ...module,
       config: defaultModuleConfig(module.type, moduleSettings),
     })),
+  };
+};
+
+const normalizeGridLayoutShape = (gridLayout, orientation = 'portrait', moduleSettings = {}) => {
+  const preset = getLegacyGridPreset(orientation);
+  const templateId = gridLayout?.template && getTemplateOrientation(gridLayout.template) === orientation
+    ? gridLayout.template
+    : preset.defaultTemplate;
+  const sourceColumns = Number(gridLayout?.columns) || preset.columns;
+  const sourceRows = Number(gridLayout?.rows) || preset.rows;
+  const sourceModules = Array.isArray(gridLayout?.modules) ? gridLayout.modules : [];
+  const needsScaling = sourceColumns !== preset.columns || sourceRows !== preset.rows;
+  const scaledModules = needsScaling
+    ? sourceModules.map((module) => scaleModuleToGrid(module, sourceColumns, sourceRows, preset.columns, preset.rows))
+    : sourceModules;
+
+  return {
+    template: templateId,
+    orientation,
+    columns: preset.columns,
+    rows: preset.rows,
+    gap: clamp(parseInt(gridLayout?.gap ?? `${preset.gap}`, 10), 4, 24),
+    modules: scaledModules.map((module) => ({
+      ...module,
+      config: module.type === 'module_rotator'
+        ? normalizeRotatorConfig(module.config || {}, moduleSettings)
+        : normalizeSharedModuleConfig(
+          module.type,
+          moduleSettings?.[module.type] && typeof moduleSettings[module.type] === 'object'
+            ? moduleSettings[module.type]
+            : module.config,
+        ),
+    })),
+  };
+};
+
+const normalizeGridLayoutsDraft = (gridLayouts = {}, moduleSettings = {}, fallbackGridLayout = null) => {
+  const sourceLayouts = gridLayouts && typeof gridLayouts === 'object' ? gridLayouts : {};
+  const fallbackOrientation = getTemplateOrientation(fallbackGridLayout?.template);
+
+  return {
+    portrait: normalizeGridLayoutShape(
+      sourceLayouts.portrait || (fallbackOrientation === 'portrait' ? fallbackGridLayout : null) || createDefaultGridLayout('portrait_focus', moduleSettings),
+      'portrait',
+      moduleSettings,
+    ),
+    landscape: normalizeGridLayoutShape(
+      sourceLayouts.landscape || (fallbackOrientation === 'landscape' ? fallbackGridLayout : null) || createDefaultGridLayout('landscape_dashboard', moduleSettings),
+      'landscape',
+      moduleSettings,
+    ),
   };
 };
 
@@ -455,6 +602,64 @@ const modulesOverlap = (left, right) => (
   (left.y || 0) < (right.y || 0) + (right.h || 1) &&
   (left.y || 0) + (left.h || 1) > (right.y || 0)
 );
+
+const isModulePlacementValid = (gridLayout, moduleId, x, y, w, h) => {
+  const columns = Math.max(1, gridLayout?.columns || 1);
+  const rows = Math.max(1, gridLayout?.rows || 1);
+  if (x < 0 || y < 0 || x + w > columns || y + h > rows) {
+    return false;
+  }
+
+  return !(gridLayout?.modules || []).some((module) => (
+    module.id !== moduleId
+    && modulesOverlap(
+      { x, y, w, h },
+      { x: module.x || 0, y: module.y || 0, w: module.w || 1, h: module.h || 1 },
+    )
+  ));
+};
+
+const findNearestValidPlacement = (gridLayout, moduleId, proposedX, proposedY, w, h) => {
+  let bestPlacement = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (let y = 0; y <= Math.max(0, (gridLayout?.rows || 1) - h); y += 1) {
+    for (let x = 0; x <= Math.max(0, (gridLayout?.columns || 1) - w); x += 1) {
+      if (!isModulePlacementValid(gridLayout, moduleId, x, y, w, h)) {
+        continue;
+      }
+
+      const distance = Math.abs(x - proposedX) + Math.abs(y - proposedY);
+      if (!bestPlacement || distance < bestDistance) {
+        bestPlacement = { x, y };
+        bestDistance = distance;
+      }
+    }
+  }
+
+  return bestPlacement;
+};
+
+const findNearestValidSize = (gridLayout, moduleId, x, y, proposedWidth, proposedHeight) => {
+  let bestSize = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (let width = 1; width <= Math.max(1, (gridLayout?.columns || 1) - x); width += 1) {
+    for (let height = 1; height <= Math.max(1, (gridLayout?.rows || 1) - y); height += 1) {
+      if (!isModulePlacementValid(gridLayout, moduleId, x, y, width, height)) {
+        continue;
+      }
+
+      const distance = Math.abs(width - proposedWidth) + Math.abs(height - proposedHeight);
+      if (!bestSize || distance < bestDistance) {
+        bestSize = { width, height };
+        bestDistance = distance;
+      }
+    }
+  }
+
+  return bestSize;
+};
 
 const buildGridDiagnostics = (gridLayout) => {
   const columns = Math.max(1, gridLayout?.columns || 1);
@@ -510,7 +715,10 @@ function App() {
   const [selectedCalendarIds, setSelectedCalendarIds] = useState([]);
   const [calendarSaving, setCalendarSaving] = useState(false);
   const [activeIntegrationSection, setActiveIntegrationSection] = useState('google');
+  const [activeLayoutOrientation, setActiveLayoutOrientation] = useState('portrait');
   const [selectedLayoutModuleId, setSelectedLayoutModuleId] = useState(null);
+  const [isLayersPanelOpen, setIsLayersPanelOpen] = useState(true);
+  const [isAddModuleMenuOpen, setIsAddModuleMenuOpen] = useState(false);
   const [displayStatus, setDisplayStatus] = useState(null);
   const [dailyBriefDebug, setDailyBriefDebug] = useState(null);
   const [dailyBriefDebugLoading, setDailyBriefDebugLoading] = useState(false);
@@ -519,6 +727,7 @@ function App() {
   const [haEntitiesError, setHaEntitiesError] = useState('');
   const [haEntityQuery, setHaEntityQuery] = useState('');
   const [haEntityDomainFilter, setHaEntityDomainFilter] = useState('all');
+  const currentEditingLayout = config?.gridLayouts?.[activeLayoutOrientation] || config?.gridLayout || null;
 
   useEffect(() => {
     fetchInitialData();
@@ -549,7 +758,7 @@ function App() {
   }, [activeTab, activeIntegrationSection]);
 
   useEffect(() => {
-    const modules = config?.gridLayout?.modules || [];
+    const modules = currentEditingLayout?.modules || [];
     if (!modules.length) {
       if (selectedLayoutModuleId !== null) {
         setSelectedLayoutModuleId(null);
@@ -560,7 +769,7 @@ function App() {
     if (!selectedLayoutModuleId || !modules.some((module) => module.id === selectedLayoutModuleId)) {
       setSelectedLayoutModuleId(modules[0].id);
     }
-  }, [config, selectedLayoutModuleId]);
+  }, [currentEditingLayout, selectedLayoutModuleId]);
 
   const fetchInitialData = async () => {
     try {
@@ -571,16 +780,26 @@ function App() {
       ]);
       const moduleSettings = normalizeModuleSettingsDraft(
         configResponse.data.moduleSettings || {},
-        configResponse.data.gridLayout?.modules || [],
+        collectGridLayoutModules(configResponse.data.gridLayouts, configResponse.data.gridLayout),
       );
+      const initialOrientation = getOrientationForResolution(displayStatusResponse.data)
+        || getOrientationForResolution(PREVIEW_RESOLUTION_PRESETS[configResponse.data.system?.previewResolution])
+        || 'portrait';
       setConfig({
         ...configResponse.data,
         moduleSettings,
-        gridLayout: normalizeGridLayoutDraft(
-          configResponse.data.gridLayout || createDefaultGridLayout('portrait_focus', moduleSettings),
+        gridLayouts: normalizeGridLayoutsDraft(
+          configResponse.data.gridLayouts,
+          moduleSettings,
+          configResponse.data.gridLayout,
+        ),
+        gridLayout: normalizeGridLayoutShape(
+          configResponse.data.gridLayouts?.portrait || configResponse.data.gridLayout || createDefaultGridLayout('portrait_focus', moduleSettings),
+          'portrait',
           moduleSettings,
         ),
       });
+      setActiveLayoutOrientation(initialOrientation);
       setHousehold(householdResponse.data);
       setDisplayStatus(displayStatusResponse.data);
     } catch (error) {
@@ -694,13 +913,19 @@ function App() {
       const householdResponse = await axios.post(`${API_BASE}/household`, household);
       const moduleSettings = normalizeModuleSettingsDraft(
         configResponse.data.config.moduleSettings || {},
-        configResponse.data.config.gridLayout?.modules || [],
+        collectGridLayoutModules(configResponse.data.config.gridLayouts, configResponse.data.config.gridLayout),
       );
       setConfig({
         ...configResponse.data.config,
         moduleSettings,
-        gridLayout: normalizeGridLayoutDraft(
-          configResponse.data.config.gridLayout || createDefaultGridLayout('portrait_focus', moduleSettings),
+        gridLayouts: normalizeGridLayoutsDraft(
+          configResponse.data.config.gridLayouts,
+          moduleSettings,
+          configResponse.data.config.gridLayout,
+        ),
+        gridLayout: normalizeGridLayoutShape(
+          configResponse.data.config.gridLayouts?.portrait || configResponse.data.config.gridLayout || createDefaultGridLayout('portrait_focus', moduleSettings),
+          'portrait',
           moduleSettings,
         ),
       });
@@ -737,14 +962,24 @@ function App() {
     setHousehold((current) => updater(typeof structuredClone === 'function' ? structuredClone(current) : JSON.parse(JSON.stringify(current))));
   };
 
-  const ensureGridLayout = (draft) => {
-    draft.gridLayout = draft.gridLayout || createDefaultGridLayout('portrait_focus', draft.moduleSettings);
-    draft.gridLayout.modules = draft.gridLayout.modules || [];
-    return draft.gridLayout;
+  const ensureGridLayouts = (draft) => {
+    draft.gridLayouts = normalizeGridLayoutsDraft(draft.gridLayouts, draft.moduleSettings, draft.gridLayout);
+    draft.gridLayout = draft.gridLayouts.portrait;
+    return draft.gridLayouts;
+  };
+
+  const ensureGridLayout = (draft, orientation = activeLayoutOrientation) => {
+    const gridLayouts = ensureGridLayouts(draft);
+    gridLayouts[orientation] = normalizeGridLayoutShape(gridLayouts[orientation], orientation, draft.moduleSettings);
+    draft.gridLayout = gridLayouts.portrait;
+    return gridLayouts[orientation];
   };
 
   const ensureModuleSettings = (draft) => {
-    draft.moduleSettings = normalizeModuleSettingsDraft(draft.moduleSettings || {}, draft.gridLayout?.modules || []);
+    draft.moduleSettings = normalizeModuleSettingsDraft(
+      draft.moduleSettings || {},
+      collectGridLayoutModules(draft.gridLayouts, draft.gridLayout),
+    );
     return draft.moduleSettings;
   };
 
@@ -785,10 +1020,12 @@ function App() {
     return nextModule;
   };
 
-  const normalizeGridLayoutDraft = (gridLayout, moduleSettings = {}) => {
-    gridLayout.columns = clamp(parseInt(gridLayout.columns || '4', 10), 2, 8);
-    gridLayout.rows = clamp(parseInt(gridLayout.rows || '8', 10), 2, 12);
-    gridLayout.gap = clamp(parseInt(gridLayout.gap || '16', 10), 0, 32);
+  const normalizeGridLayoutDraft = (gridLayout, moduleSettings = {}, orientation = activeLayoutOrientation) => {
+    const preset = getLegacyGridPreset(orientation);
+    gridLayout.orientation = orientation;
+    gridLayout.columns = preset.columns;
+    gridLayout.rows = preset.rows;
+    gridLayout.gap = clamp(parseInt(gridLayout.gap || `${preset.gap}`, 10), 4, 24);
     gridLayout.modules = (gridLayout.modules || []).map((module) => normalizeGridModule(module, gridLayout, moduleSettings));
     return gridLayout;
   };
@@ -800,9 +1037,13 @@ function App() {
         ...(moduleSettings[type] || {}),
         [key]: value,
       });
-      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings);
       draft.moduleSettings = moduleSettings;
-      draft.gridLayout = gridLayout;
+      const gridLayouts = ensureGridLayouts(draft);
+      draft.gridLayouts = {
+        portrait: normalizeGridLayoutDraft(gridLayouts.portrait, moduleSettings, 'portrait'),
+        landscape: normalizeGridLayoutDraft(gridLayouts.landscape, moduleSettings, 'landscape'),
+      };
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
@@ -813,9 +1054,13 @@ function App() {
       const entityMap = new Map(haEntities.map((entity) => [entity.id, entity]));
       const currentConfig = normalizeHomeAssistantConfig(moduleSettings.home_assistant || {}, entityMap);
       moduleSettings.home_assistant = normalizeHomeAssistantConfig(updater(currentConfig), entityMap);
-      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings);
       draft.moduleSettings = moduleSettings;
-      draft.gridLayout = gridLayout;
+      const gridLayouts = ensureGridLayouts(draft);
+      draft.gridLayouts = {
+        portrait: normalizeGridLayoutDraft(gridLayouts.portrait, moduleSettings, 'portrait'),
+        landscape: normalizeGridLayoutDraft(gridLayouts.landscape, moduleSettings, 'landscape'),
+      };
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
@@ -934,11 +1179,65 @@ function App() {
     });
   };
 
+  const resolvePresetSizeForLayout = (gridLayout, preset) => {
+    const presetGrid = getLegacyGridPreset(gridLayout?.orientation || activeLayoutOrientation);
+    return {
+      w: Math.max(1, Math.round((preset.w / presetGrid.legacyColumns) * gridLayout.columns)),
+      h: Math.max(1, Math.round((preset.h / presetGrid.legacyRows) * gridLayout.rows)),
+    };
+  };
+
+  const findFirstOpenPlacement = (gridLayout, moduleId, w, h) => {
+    for (let y = 0; y <= Math.max(0, gridLayout.rows - h); y += 1) {
+      for (let x = 0; x <= Math.max(0, gridLayout.columns - w); x += 1) {
+        if (isModulePlacementValid(gridLayout, moduleId, x, y, w, h)) {
+          return { x, y };
+        }
+      }
+    }
+
+    return null;
+  };
+
+  const getModuleInsertionSpans = (type, gridLayout) => {
+    const presetCandidates = Object.values(MODULE_SIZE_PRESETS[type] || {})
+      .map((preset) => resolvePresetSizeForLayout(gridLayout, preset))
+      .sort((left, right) => (left.w * left.h) - (right.w * right.h));
+    const fallbackCandidates = [
+      { w: Math.min(4, gridLayout.columns), h: Math.min(4, gridLayout.rows) },
+      { w: Math.min(3, gridLayout.columns), h: Math.min(3, gridLayout.rows) },
+      { w: Math.min(2, gridLayout.columns), h: Math.min(2, gridLayout.rows) },
+      { w: 1, h: 1 },
+    ];
+
+    return [...presetCandidates, ...fallbackCandidates].filter((candidate, index, candidates) => (
+      candidates.findIndex((entry) => entry.w === candidate.w && entry.h === candidate.h) === index
+    ));
+  };
+
+  const findAvailableModulePlacement = (type, moduleId, gridLayout) => {
+    for (const span of getModuleInsertionSpans(type, gridLayout)) {
+      const placement = findFirstOpenPlacement(gridLayout, moduleId, span.w, span.h);
+      if (placement) {
+        return { ...placement, w: span.w, h: span.h };
+      }
+    }
+
+    return null;
+  };
+
   const applyLayoutTemplate = (templateId) => {
     const nextGridLayout = createDefaultGridLayout(templateId, config?.moduleSettings);
     setSelectedLayoutModuleId(nextGridLayout.modules[0]?.id || null);
     updateConfig((draft) => {
-      draft.gridLayout = nextGridLayout;
+      const moduleSettings = ensureModuleSettings(draft);
+      const gridLayouts = ensureGridLayouts(draft);
+      const orientation = getTemplateOrientation(templateId);
+      draft.gridLayouts = {
+        ...gridLayouts,
+        [orientation]: normalizeGridLayoutDraft(nextGridLayout, moduleSettings, orientation),
+      };
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
@@ -946,22 +1245,29 @@ function App() {
   const addGridModule = (type) => {
     const moduleId = `${type}_${Date.now()}`;
     setSelectedLayoutModuleId(moduleId);
+    setIsAddModuleMenuOpen(false);
     updateConfig((draft) => {
       const moduleSettings = ensureModuleSettings(draft);
-      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings);
+      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings, activeLayoutOrientation);
       const modules = gridLayout.modules || [];
-      const nextIndex = modules.length;
+      const placement = findAvailableModulePlacement(type, moduleId, gridLayout);
+      if (!placement) {
+        alert('No free space is available for a new module in this layout. Remove or resize an existing module first.');
+        return draft;
+      }
       modules.push({
         id: moduleId,
         type,
         config: defaultModuleConfig(type, moduleSettings),
-        x: nextIndex % Math.max(1, gridLayout.columns - 1),
-        y: Math.floor(nextIndex / Math.max(1, gridLayout.columns - 1)) * 2,
-        w: type === 'daily_brief' || type === 'module_rotator' ? 2 : 1,
-        h: type === 'weather' || type === 'module_rotator' ? 2 : 1,
+        x: placement.x,
+        y: placement.y,
+        w: placement.w,
+        h: placement.h,
         align: 'stretch',
       });
       gridLayout.modules = modules.map((module) => normalizeGridModule(module, gridLayout, moduleSettings));
+      draft.gridLayouts[activeLayoutOrientation] = gridLayout;
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
@@ -969,7 +1275,7 @@ function App() {
   const updateRotatorConfig = (moduleId, key, value) => {
     updateConfig((draft) => {
       const moduleSettings = ensureModuleSettings(draft);
-      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings);
+      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings, activeLayoutOrientation);
       const moduleIndex = gridLayout.modules.findIndex((entry) => entry.id === moduleId && entry.type === 'module_rotator');
       if (moduleIndex >= 0) {
         const module = { ...gridLayout.modules[moduleIndex] };
@@ -979,6 +1285,8 @@ function App() {
         }, moduleSettings);
         gridLayout.modules[moduleIndex] = normalizeGridModule(module, gridLayout, moduleSettings);
       }
+      draft.gridLayouts[activeLayoutOrientation] = gridLayout;
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
@@ -986,7 +1294,7 @@ function App() {
   const addRotatorChildModule = (moduleId, type) => {
     updateConfig((draft) => {
       const moduleSettings = ensureModuleSettings(draft);
-      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings);
+      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings, activeLayoutOrientation);
       const moduleIndex = gridLayout.modules.findIndex((entry) => entry.id === moduleId && entry.type === 'module_rotator');
       if (moduleIndex >= 0) {
         const module = { ...gridLayout.modules[moduleIndex] };
@@ -999,6 +1307,8 @@ function App() {
           gridLayout.modules[moduleIndex] = normalizeGridModule(module, gridLayout, moduleSettings);
         }
       }
+      draft.gridLayouts[activeLayoutOrientation] = gridLayout;
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
@@ -1006,7 +1316,7 @@ function App() {
   const updateRotatorChildModule = (moduleId, childId, changes) => {
     updateConfig((draft) => {
       const moduleSettings = ensureModuleSettings(draft);
-      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings);
+      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings, activeLayoutOrientation);
       const moduleIndex = gridLayout.modules.findIndex((entry) => entry.id === moduleId && entry.type === 'module_rotator');
       if (moduleIndex >= 0) {
         const module = { ...gridLayout.modules[moduleIndex] };
@@ -1032,6 +1342,8 @@ function App() {
         };
         gridLayout.modules[moduleIndex] = normalizeGridModule(module, gridLayout, moduleSettings);
       }
+      draft.gridLayouts[activeLayoutOrientation] = gridLayout;
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
@@ -1039,7 +1351,7 @@ function App() {
   const removeRotatorChildModule = (moduleId, childId) => {
     updateConfig((draft) => {
       const moduleSettings = ensureModuleSettings(draft);
-      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings);
+      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings, activeLayoutOrientation);
       const moduleIndex = gridLayout.modules.findIndex((entry) => entry.id === moduleId && entry.type === 'module_rotator');
       if (moduleIndex >= 0) {
         const module = { ...gridLayout.modules[moduleIndex] };
@@ -1052,6 +1364,8 @@ function App() {
           gridLayout.modules[moduleIndex] = normalizeGridModule(module, gridLayout, moduleSettings);
         }
       }
+      draft.gridLayouts[activeLayoutOrientation] = gridLayout;
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
@@ -1059,21 +1373,27 @@ function App() {
   const updateGridModule = (moduleId, key, value) => {
     updateConfig((draft) => {
       const moduleSettings = ensureModuleSettings(draft);
-      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings);
+      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings, activeLayoutOrientation);
       const moduleIndex = gridLayout.modules.findIndex((entry) => entry.id === moduleId);
       const module = moduleIndex >= 0 ? gridLayout.modules[moduleIndex] : null;
       if (module) {
-        module[key] = value;
-        gridLayout.modules[moduleIndex] = normalizeGridModule(module, gridLayout, moduleSettings);
+        const nextModule = normalizeGridModule({ ...module, [key]: value }, gridLayout, moduleSettings);
+        if (isModulePlacementValid(gridLayout, nextModule.id, nextModule.x, nextModule.y, nextModule.w, nextModule.h)) {
+          gridLayout.modules[moduleIndex] = nextModule;
+        }
       }
+      draft.gridLayouts[activeLayoutOrientation] = gridLayout;
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
 
   const removeGridModule = (moduleId) => {
     updateConfig((draft) => {
-      const gridLayout = ensureGridLayout(draft);
+      const gridLayout = ensureGridLayout(draft, activeLayoutOrientation);
       gridLayout.modules = gridLayout.modules.filter((module) => module.id !== moduleId);
+      draft.gridLayouts[activeLayoutOrientation] = gridLayout;
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
@@ -1081,12 +1401,25 @@ function App() {
   const placeGridModule = (moduleId, x, y) => {
     updateConfig((draft) => {
       const moduleSettings = ensureModuleSettings(draft);
-      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings);
+      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings, activeLayoutOrientation);
       const moduleIndex = gridLayout.modules.findIndex((entry) => entry.id === moduleId);
       if (moduleIndex >= 0) {
         const module = { ...gridLayout.modules[moduleIndex], x, y };
-        gridLayout.modules[moduleIndex] = normalizeGridModule(module, gridLayout, moduleSettings);
+        const normalizedModule = normalizeGridModule(module, gridLayout, moduleSettings);
+        const placement = findNearestValidPlacement(
+          gridLayout,
+          normalizedModule.id,
+          normalizedModule.x,
+          normalizedModule.y,
+          normalizedModule.w,
+          normalizedModule.h,
+        );
+        if (placement) {
+          gridLayout.modules[moduleIndex] = normalizeGridModule({ ...normalizedModule, ...placement }, gridLayout, moduleSettings);
+        }
       }
+      draft.gridLayouts[activeLayoutOrientation] = gridLayout;
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
@@ -1094,14 +1427,22 @@ function App() {
   const moveGridModule = (moduleId, dx, dy) => {
     updateConfig((draft) => {
       const moduleSettings = ensureModuleSettings(draft);
-      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings);
+      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings, activeLayoutOrientation);
       const moduleIndex = gridLayout.modules.findIndex((entry) => entry.id === moduleId);
       if (moduleIndex >= 0) {
         const module = { ...gridLayout.modules[moduleIndex] };
-        module.x = (module.x || 0) + dx;
-        module.y = (module.y || 0) + dy;
-        gridLayout.modules[moduleIndex] = normalizeGridModule(module, gridLayout, moduleSettings);
+        const nextModule = normalizeGridModule({
+          ...module,
+          x: (module.x || 0) + dx,
+          y: (module.y || 0) + dy,
+        }, gridLayout, moduleSettings);
+        const placement = findNearestValidPlacement(gridLayout, nextModule.id, nextModule.x, nextModule.y, nextModule.w, nextModule.h);
+        if (placement) {
+          gridLayout.modules[moduleIndex] = normalizeGridModule({ ...nextModule, ...placement }, gridLayout, moduleSettings);
+        }
       }
+      draft.gridLayouts[activeLayoutOrientation] = gridLayout;
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
@@ -1109,7 +1450,7 @@ function App() {
   const resizeGridModule = (moduleId, width, height) => {
     updateConfig((draft) => {
       const moduleSettings = ensureModuleSettings(draft);
-      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings);
+      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings, activeLayoutOrientation);
       const moduleIndex = gridLayout.modules.findIndex((entry) => entry.id === moduleId);
       if (moduleIndex >= 0) {
         const module = {
@@ -1117,8 +1458,25 @@ function App() {
           w: width,
           h: height,
         };
-        gridLayout.modules[moduleIndex] = normalizeGridModule(module, gridLayout, moduleSettings);
+        const normalizedModule = normalizeGridModule(module, gridLayout, moduleSettings);
+        const nextSize = findNearestValidSize(
+          gridLayout,
+          normalizedModule.id,
+          normalizedModule.x,
+          normalizedModule.y,
+          normalizedModule.w,
+          normalizedModule.h,
+        );
+        if (nextSize) {
+          gridLayout.modules[moduleIndex] = normalizeGridModule({
+            ...normalizedModule,
+            w: nextSize.width,
+            h: nextSize.height,
+          }, gridLayout, moduleSettings);
+        }
       }
+      draft.gridLayouts[activeLayoutOrientation] = gridLayout;
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
@@ -1126,7 +1484,7 @@ function App() {
   const applyModuleSizePreset = (moduleId, presetKey) => {
     updateConfig((draft) => {
       const moduleSettings = ensureModuleSettings(draft);
-      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings);
+      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings, activeLayoutOrientation);
       const moduleIndex = gridLayout.modules.findIndex((entry) => entry.id === moduleId);
       if (moduleIndex < 0) {
         return draft;
@@ -1136,10 +1494,23 @@ function App() {
       const presets = MODULE_SIZE_PRESETS[module.type] || {};
       const preset = presets[presetKey];
       if (preset) {
-        module.w = preset.w;
-        module.h = preset.h;
-        gridLayout.modules[moduleIndex] = normalizeGridModule(module, gridLayout, moduleSettings);
+        const resolvedPreset = resolvePresetSizeForLayout(gridLayout, preset);
+        const nextSize = findNearestValidSize(
+          gridLayout,
+          module.id,
+          module.x || 0,
+          module.y || 0,
+          resolvedPreset.w,
+          resolvedPreset.h,
+        );
+        if (nextSize) {
+          module.w = nextSize.width;
+          module.h = nextSize.height;
+          gridLayout.modules[moduleIndex] = normalizeGridModule(module, gridLayout, moduleSettings);
+        }
       }
+      draft.gridLayouts[activeLayoutOrientation] = gridLayout;
+      draft.gridLayout = draft.gridLayouts.portrait;
       return draft;
     });
   };
@@ -1208,10 +1579,10 @@ function App() {
   const dailyBriefScopedCalendarIds = dailyBriefCalendarMode === 'include_selected'
     ? (contextConfig.briefIncludedCalendarIds || [])
     : (contextConfig.briefExcludedCalendarIds || []);
-  const currentGridLayout = config.gridLayout || createDefaultGridLayout('portrait_focus', config.moduleSettings);
+  const currentGridLayout = config.gridLayouts?.[activeLayoutOrientation]
+    || config.gridLayout
+    || createDefaultGridLayout(activeLayoutOrientation === 'landscape' ? 'landscape_dashboard' : 'portrait_focus', config.moduleSettings);
   const currentGridDiagnostics = buildGridDiagnostics(currentGridLayout);
-  const overlapModuleIds = new Set(currentGridDiagnostics.overlapIds);
-  const outOfBoundsModuleIds = new Set(currentGridDiagnostics.outOfBoundsIds);
   const selectedLayoutModule = (currentGridLayout.modules || []).find((module) => module.id === selectedLayoutModuleId) || null;
   const weatherConfig = getModuleSettings('weather');
   const haEntityMap = new Map(haEntities.map((entity) => [entity.id, entity]));
@@ -1249,9 +1620,266 @@ function App() {
       ? { width: displayStatus.width, height: displayStatus.height, label: 'Live device' }
       : PREVIEW_RESOLUTION_PRESETS['1080x1920'])
     : PREVIEW_RESOLUTION_PRESETS[configuredPreviewResolution] || PREVIEW_RESOLUTION_PRESETS['1080x1920'];
+  const activeCanvasResolution = getOrientationForResolution(resolvedPreviewResolution) === activeLayoutOrientation
+    ? resolvedPreviewResolution
+    : (activeLayoutOrientation === 'landscape'
+      ? PREVIEW_RESOLUTION_PRESETS['1920x1080']
+      : PREVIEW_RESOLUTION_PRESETS['1080x1920']);
+  const availableLayoutTemplates = Object.entries(LAYOUT_TEMPLATES)
+    .filter(([, template]) => template.orientation === activeLayoutOrientation);
   const activeTabMeta = CONFIG_TABS.find((tab) => tab.id === activeTab) || CONFIG_TABS[0];
   const activeIntegrationMeta = INTEGRATION_SECTIONS.find((section) => section.id === activeIntegrationSection) || INTEGRATION_SECTIONS[0];
   const currentYear = new Date().getFullYear();
+  const selectedLayoutModuleMeta = selectedLayoutModule
+    ? (MODULE_TYPES.find((item) => item.id === selectedLayoutModule.type) || { label: selectedLayoutModule.type, icon: '•' })
+    : null;
+
+  const renderModuleSpecificInspector = () => {
+    if (!selectedLayoutModule) {
+      return (
+        <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-950/40 p-5 text-sm text-slate-500">
+          Select a module in the canvas to inspect its layout and settings.
+        </div>
+      );
+    }
+
+    if (selectedLayoutModule.type === 'weather') {
+      return (
+        <div className="grid grid-cols-1 gap-4">
+          <div>
+            <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Display Name</label>
+            <input
+              type="text"
+              value={weatherConfig.displayName || ''}
+              onChange={(event) => updateModuleConfig('weather', 'displayName', event.target.value)}
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">City</label>
+              <input
+                type="text"
+                value={weatherConfig.city || ''}
+                onChange={(event) => updateModuleConfig('weather', 'city', event.target.value)}
+                className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Country</label>
+              <input
+                type="text"
+                value={weatherConfig.country || ''}
+                onChange={(event) => updateModuleConfig('weather', 'country', event.target.value)}
+                className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Postal Code</label>
+              <input
+                type="text"
+                value={weatherConfig.postalCode || ''}
+                onChange={(event) => updateModuleConfig('weather', 'postalCode', event.target.value)}
+                className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Refresh</label>
+              <input
+                type="number"
+                min="5"
+                max="180"
+                value={weatherConfig.refreshMinutes || 30}
+                onChange={(event) => updateModuleConfig('weather', 'refreshMinutes', parseInt(event.target.value || '30', 10))}
+                className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+              />
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (selectedLayoutModule.type === 'calendar') {
+      return (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">View</label>
+            <select
+              value={calendarModuleConfig.viewMode || 'list'}
+              onChange={(event) => updateModuleConfig('calendar', 'viewMode', event.target.value)}
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+            >
+              <option value="list">List</option>
+              <option value="day_cards">Day cards</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Days</label>
+            <input
+              type="number"
+              min="1"
+              max="7"
+              value={calendarModuleConfig.daysToShow || 4}
+              onChange={(event) => updateModuleConfig('calendar', 'daysToShow', parseInt(event.target.value || '4', 10))}
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Max Items</label>
+            <input
+              type="number"
+              min="1"
+              max="12"
+              value={calendarModuleConfig.maxItems || 5}
+              onChange={(event) => updateModuleConfig('calendar', 'maxItems', parseInt(event.target.value || '5', 10))}
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+            />
+          </div>
+        </div>
+      );
+    }
+
+    if (selectedLayoutModule.type === 'daily_brief') {
+      return (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Cards Per Page</label>
+            <input
+              type="number"
+              min="1"
+              max="5"
+              value={dailyBriefConfig.maxItems || 3}
+              onChange={(event) => updateModuleConfig('daily_brief', 'maxItems', parseInt(event.target.value || '3', 10))}
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Page Seconds</label>
+            <input
+              type="number"
+              min="3"
+              max="60"
+              value={dailyBriefConfig.pageSeconds || 10}
+              onChange={(event) => updateModuleConfig('daily_brief', 'pageSeconds', parseInt(event.target.value || '10', 10))}
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+            />
+          </div>
+        </div>
+      );
+    }
+
+    if (selectedLayoutModule.type === 'home_assistant') {
+      return (
+        <div className="space-y-3">
+          <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+            <div>
+              <div className="text-sm font-semibold text-white">Enabled</div>
+              <div className="text-xs text-slate-500">Entity cards are configured in Integrations.</div>
+            </div>
+            <input
+              type="checkbox"
+              checked={homeAssistantConfig.enabled !== false}
+              onChange={(event) => updateModuleConfig('home_assistant', 'enabled', event.target.checked)}
+            />
+          </label>
+          <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-3 text-xs text-slate-500">
+            {homeAssistantConfig.entityCards.length} entity card{homeAssistantConfig.entityCards.length === 1 ? '' : 's'} configured.
+          </div>
+        </div>
+      );
+    }
+
+    if (selectedLayoutModule.type === 'module_rotator') {
+      const rotatorConfig = normalizeRotatorConfig(selectedLayoutModule.config || {}, config.moduleSettings);
+      return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Rotation Seconds</label>
+              <input
+                type="number"
+                min="3"
+                max="120"
+                value={rotatorConfig.rotationSeconds}
+                onChange={(event) => updateRotatorConfig(selectedLayoutModule.id, 'rotationSeconds', parseInt(event.target.value || '10', 10))}
+                className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Animation</label>
+              <select
+                value={rotatorConfig.animation}
+                onChange={(event) => updateRotatorConfig(selectedLayoutModule.id, 'animation', event.target.value)}
+                className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+              >
+                {ROTATOR_ANIMATION_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {rotatorConfig.modules.map((childModule, childIndex) => (
+              <div key={childModule.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Page {childIndex + 1}</div>
+                    <div className="mt-1 text-sm font-semibold text-white">{MODULE_TYPES.find((item) => item.id === childModule.type)?.label || childModule.type}</div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={rotatorConfig.modules.length <= 1}
+                    onClick={() => removeRotatorChildModule(selectedLayoutModule.id, childModule.id)}
+                    className="text-slate-500 transition-colors hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <select
+                    value={childModule.type}
+                    onChange={(event) => updateRotatorChildModule(selectedLayoutModule.id, childModule.id, { type: event.target.value })}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+                  >
+                    {ROTATABLE_MODULE_TYPES.map((moduleType) => (
+                      <option key={`${childModule.id}-${moduleType.id}`} value={moduleType.id}>{moduleType.label}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={childModule.align || 'stretch'}
+                    onChange={(event) => updateRotatorChildModule(selectedLayoutModule.id, childModule.id, { align: event.target.value })}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+                  >
+                    <option value="stretch">Stretch</option>
+                    <option value="start">Top Left</option>
+                    <option value="center">Center</option>
+                    <option value="end">Bottom Right</option>
+                  </select>
+                </div>
+              </div>
+            ))}
+            {rotatorConfig.modules.length < 3 && (
+              <button
+                type="button"
+                onClick={() => addRotatorChildModule(selectedLayoutModule.id, 'clock')}
+                className="w-full rounded-xl border border-dashed border-slate-700 px-4 py-3 text-sm font-semibold text-slate-300 transition-all hover:border-[#ff8bbf] hover:text-white"
+              >
+                Add Rotator Page
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-3 text-xs text-slate-500">
+        This module uses shared settings configured elsewhere in the console.
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200">
@@ -1849,374 +2477,313 @@ function App() {
           )}
 
           {activeTab === 'layout' && (
-            <div className="flex flex-col lg:flex-row gap-8">
-              <div className="flex-1 space-y-6">
-                <div className="flex items-center justify-between gap-4">
+            <div className="space-y-6">
+              <section className="rounded-[28px] border border-slate-800 bg-slate-900/60 p-6 shadow-2xl shadow-slate-950/30">
+                <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
                   <div>
-                    <h2 className="text-xl font-bold text-white">Grid Layout</h2>
-                    <p className="text-sm text-slate-500">Define module placement, width, height, and alignment with reusable templates.</p>
+                    <div className="text-xs font-bold uppercase tracking-[0.24em] text-[#ffd7aa]/80">Canvas Workspace</div>
+                    <h2 className="mt-2 text-3xl font-bold tracking-tight text-white">Layout Editor</h2>
+                    <p className="mt-2 max-w-2xl text-sm text-slate-400">Edit the mirror as a visual canvas. Select modules in the preview, drag to move, resize from the handle, and adjust details in the inspector.</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex rounded-2xl border border-slate-700 bg-slate-950/80 p-1">
+                      {['portrait', 'landscape'].map((orientation) => (
+                        <button
+                          key={orientation}
+                          type="button"
+                          onClick={() => {
+                            setActiveLayoutOrientation(orientation);
+                            setIsAddModuleMenuOpen(false);
+                          }}
+                          className={`rounded-xl px-4 py-2 text-sm font-semibold transition-all ${
+                            activeLayoutOrientation === orientation
+                              ? 'bg-[#ff8bbf] text-slate-950'
+                              : 'text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          {GRID_ORIENTATION_PRESETS[orientation].label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setIsAddModuleMenuOpen((current) => !current)}
+                        className="inline-flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-950/80 px-4 py-3 text-sm font-semibold text-white transition-all hover:border-[#ff8bbf] hover:text-[#ffd7aa]"
+                      >
+                        <Plus size={16} />
+                        Add Module
+                      </button>
+                      {isAddModuleMenuOpen && (
+                        <div className="absolute right-0 top-[calc(100%+0.75rem)] z-30 min-w-[240px] rounded-2xl border border-slate-700 bg-slate-950/95 p-2 shadow-2xl shadow-slate-950/60 backdrop-blur">
+                          {MODULE_TYPES.map((type) => (
+                            <button
+                              key={type.id}
+                              type="button"
+                              onClick={() => addGridModule(type.id)}
+                              className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm text-slate-200 transition-all hover:bg-slate-800"
+                            >
+                              <span className="text-lg">{type.icon}</span>
+                              <span>{type.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-
-                <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 space-y-5">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Template</label>
-                      <select
-                        value={currentGridLayout.template || 'portrait_focus'}
-                        onChange={(event) => applyLayoutTemplate(event.target.value)}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                      >
-                        {Object.entries(LAYOUT_TEMPLATES).map(([id, template]) => (
-                          <option key={id} value={id}>{template.label}</option>
-                        ))}
-                      </select>
-                      <div className="text-xs text-slate-500 mt-2">
-                        {LAYOUT_TEMPLATES[currentGridLayout.template || 'portrait_focus']?.description}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-3 gap-3">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Cols</label>
-                        <input
-                          type="number"
-                          min="2"
-                          max="8"
-                          value={currentGridLayout.columns}
-                          onChange={(event) => updateConfig((draft) => {
-                            draft.gridLayout.columns = parseInt(event.target.value || '4', 10);
-                            draft.moduleSettings = ensureModuleSettings(draft);
-                            normalizeGridLayoutDraft(draft.gridLayout, draft.moduleSettings);
-                            return draft;
-                          })}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Rows</label>
-                        <input
-                          type="number"
-                          min="2"
-                          max="12"
-                          value={currentGridLayout.rows}
-                          onChange={(event) => updateConfig((draft) => {
-                            draft.gridLayout.rows = parseInt(event.target.value || '8', 10);
-                            draft.moduleSettings = ensureModuleSettings(draft);
-                            normalizeGridLayoutDraft(draft.gridLayout, draft.moduleSettings);
-                            return draft;
-                          })}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Gap</label>
-                        <input
-                          type="number"
-                          min="0"
-                          max="32"
-                          value={currentGridLayout.gap}
-                          onChange={(event) => updateConfig((draft) => {
-                            draft.gridLayout.gap = parseInt(event.target.value || '16', 10);
-                            draft.moduleSettings = ensureModuleSettings(draft);
-                            normalizeGridLayoutDraft(draft.gridLayout, draft.moduleSettings);
-                            return draft;
-                          })}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                        />
-                      </div>
+                <div className="mt-6 grid gap-4 md:grid-cols-[minmax(0,320px),160px,1fr]">
+                  <div>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Template</label>
+                    <select
+                      value={currentGridLayout.template || GRID_ORIENTATION_PRESETS[activeLayoutOrientation].defaultTemplate}
+                      onChange={(event) => applyLayoutTemplate(event.target.value)}
+                      className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+                    >
+                      {availableLayoutTemplates.map(([id, template]) => (
+                        <option key={id} value={id}>{template.label}</option>
+                      ))}
+                    </select>
+                    <div className="mt-2 text-xs text-slate-500">
+                      {LAYOUT_TEMPLATES[currentGridLayout.template || GRID_ORIENTATION_PRESETS[activeLayoutOrientation].defaultTemplate]?.description}
                     </div>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Add Module</label>
-                    <select
-                      value=""
-                      onChange={(event) => event.target.value && addGridModule(event.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                    >
-                      <option value="" disabled>Choose a module</option>
-                      {MODULE_TYPES.map((type) => (
-                        <option key={type.id} value={type.id}>{type.label}</option>
-                      ))}
-                    </select>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Gap</label>
+                    <input
+                      type="number"
+                      min="4"
+                      max="24"
+                      value={currentGridLayout.gap}
+                      onChange={(event) => updateConfig((draft) => {
+                        const moduleSettings = ensureModuleSettings(draft);
+                        const gridLayout = ensureGridLayout(draft, activeLayoutOrientation);
+                        gridLayout.gap = parseInt(event.target.value || `${getLegacyGridPreset(activeLayoutOrientation).gap}`, 10);
+                        draft.gridLayouts[activeLayoutOrientation] = normalizeGridLayoutDraft(gridLayout, moduleSettings, activeLayoutOrientation);
+                        draft.gridLayout = draft.gridLayouts.portrait;
+                        return draft;
+                      })}
+                      className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+                    />
+                  </div>
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-xs text-slate-500">
+                    Fixed internal grid: {currentGridLayout.columns} x {currentGridLayout.rows} for {GRID_ORIENTATION_PRESETS[activeLayoutOrientation].label.toLowerCase()}.
+                    Preview ratio: {activeCanvasResolution.width} x {activeCanvasResolution.height} ({activeCanvasResolution.label}).
+                  </div>
+                </div>
+              </section>
+
+              <div className="grid gap-6 xl:grid-cols-[240px,minmax(0,1fr),360px]">
+                <aside className="space-y-4">
+                  <section className="rounded-3xl border border-slate-800 bg-slate-900/50 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Layers</div>
+                        <div className="mt-1 text-sm text-slate-400">{currentGridLayout.modules.length} modules in this layout</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsLayersPanelOpen((current) => !current)}
+                        className="rounded-xl border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 transition-all hover:border-[#ff8bbf] hover:text-white"
+                      >
+                        {isLayersPanelOpen ? 'Collapse' : 'Expand'}
+                      </button>
+                    </div>
+                    {isLayersPanelOpen && (
+                      <div className="mt-4 space-y-2">
+                        {(currentGridLayout.modules || []).map((module) => {
+                          const moduleMeta = MODULE_TYPES.find((item) => item.id === module.type) || { label: module.type, icon: '•' };
+                          return (
+                            <div
+                              key={module.id}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => setSelectedLayoutModuleId(module.id)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                  event.preventDefault();
+                                  setSelectedLayoutModuleId(module.id);
+                                }
+                              }}
+                              className={`w-full cursor-pointer rounded-2xl border px-3 py-3 text-left transition-all ${
+                                selectedLayoutModuleId === module.id
+                                  ? 'border-[#ff8bbf] bg-[#ff8bbf]/10'
+                                  : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                                    <span>{moduleMeta.icon}</span>
+                                    <span className="truncate">{moduleMeta.label}</span>
+                                  </div>
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    {module.x}, {module.y} • {module.w} x {module.h}
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    removeGridModule(module.id);
+                                  }}
+                                  className="text-slate-500 transition-colors hover:text-red-400"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+                </aside>
+
+                <section className="space-y-4">
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-4">
+                      <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Occupied</div>
+                      <div className="mt-2 text-2xl font-semibold text-white">
+                        {currentGridDiagnostics.occupiedCellCount}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">of {currentGridLayout.columns * currentGridLayout.rows} cells</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-4">
+                      <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Conflicts</div>
+                      <div className={`mt-2 text-2xl font-semibold ${currentGridDiagnostics.overlappingCellCount > 0 ? 'text-amber-300' : 'text-white'}`}>
+                        {currentGridDiagnostics.overlappingCellCount}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">overlaps are blocked during editing</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-4">
+                      <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Selected</div>
+                      <div className="mt-2 text-base font-semibold text-white">
+                        {selectedLayoutModuleMeta?.label || 'Nothing selected'}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">Drag the selected module to reposition it.</div>
+                    </div>
+                  </div>
+                  <div className="rounded-[32px] border border-slate-800 bg-slate-900/50 p-4 shadow-2xl shadow-slate-950/30">
+                    <MirrorPreview
+                      config={config}
+                      gridLayout={currentGridLayout}
+                      orientation={activeLayoutOrientation}
+                      resolution={activeCanvasResolution}
+                      selectedModuleId={selectedLayoutModuleId}
+                      occupancy={currentGridDiagnostics.occupancy}
+                      overlapModuleIds={currentGridDiagnostics.overlapIds}
+                      onSelectModule={setSelectedLayoutModuleId}
+                      onMoveModule={placeGridModule}
+                      onResizeModule={resizeGridModule}
+                    />
                   </div>
                 </section>
 
-                <div className="grid grid-cols-1 gap-4">
-                  {(currentGridLayout.modules || []).map((module, moduleIndex) => {
-                    const isRotator = module.type === 'module_rotator';
-                    const rotatorConfig = isRotator ? normalizeRotatorConfig(module.config || {}) : null;
-
-                    return (
-                      <div
-                        key={module.id || `${module.type}-${moduleIndex}`}
-                        onClick={() => setSelectedLayoutModuleId(module.id)}
-                        className={`bg-slate-900/50 border rounded-2xl overflow-hidden transition-colors cursor-pointer ${
-                          selectedLayoutModuleId === module.id
-                            ? 'border-[#ff8bbf] shadow-lg shadow-pink-500/10'
-                            : overlapModuleIds.has(module.id) || outOfBoundsModuleIds.has(module.id)
-                              ? 'border-amber-500/60'
-                              : 'border-slate-800'
-                        }`}
-                      >
-                        <div className="p-4 bg-slate-800/30 flex items-center justify-between border-b border-slate-800">
-                          <div className="flex items-center gap-4">
-                            <GripVertical size={20} className="text-slate-600" />
-                            <span className="text-2xl">{MODULE_TYPES.find((item) => item.id === module.type)?.icon || '•'}</span>
-                            <div>
-                              <div className="font-bold text-slate-200">{MODULE_TYPES.find((item) => item.id === module.type)?.label || module.type}</div>
-                              <div className="text-xs text-slate-500">
-                                Position ({module.x}, {module.y}) • Size {module.w} x {module.h}
-                                {isRotator ? ` • ${rotatorConfig.modules.length} page${rotatorConfig.modules.length === 1 ? '' : 's'}` : ''}
-                              </div>
-                            </div>
+                <aside className="space-y-4">
+                  <section className="rounded-3xl border border-slate-800 bg-slate-900/50 p-5">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Inspector</div>
+                        <div className="mt-2 text-lg font-semibold text-white">
+                          {selectedLayoutModuleMeta ? `${selectedLayoutModuleMeta.icon} ${selectedLayoutModuleMeta.label}` : 'No module selected'}
+                        </div>
+                        {selectedLayoutModule && (
+                          <div className="mt-1 text-xs text-slate-500">
+                            Position ({selectedLayoutModule.x}, {selectedLayoutModule.y}) • Size {selectedLayoutModule.w} x {selectedLayoutModule.h}
                           </div>
-                          <div className="flex items-center gap-2">
-                            {selectedLayoutModuleId === module.id && (
-                              <span className="px-2 py-1 rounded-full bg-[#ff86d3]/20 text-[#ffc1d9] text-[10px] font-bold uppercase tracking-wider">
-                                Selected
-                              </span>
-                            )}
-                            {overlapModuleIds.has(module.id) && (
-                              <span className="px-2 py-1 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold uppercase tracking-wider">
-                                Overlap
-                              </span>
-                            )}
-                            {outOfBoundsModuleIds.has(module.id) && (
-                              <span className="px-2 py-1 rounded-full bg-red-500/20 text-red-300 text-[10px] font-bold uppercase tracking-wider">
-                                Bounds
-                              </span>
-                            )}
-                            <button
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                removeGridModule(module.id);
-                              }}
-                              className="text-slate-500 hover:text-red-400 transition-colors"
-                            >
-                              <Trash2 size={18} />
-                            </button>
+                        )}
+                      </div>
+                      {selectedLayoutModule && (
+                        <button
+                          type="button"
+                          onClick={() => removeGridModule(selectedLayoutModule.id)}
+                          className="rounded-xl border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 transition-all hover:border-red-400 hover:text-red-300"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+
+                    {selectedLayoutModule && (
+                      <div className="mt-6 space-y-5">
+                        <div>
+                          <div className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-500">Size Presets</div>
+                          <div className="flex flex-wrap gap-2">
+                            {Object.entries(MODULE_SIZE_PRESETS[selectedLayoutModule.type] || {}).map(([presetKey, preset]) => (
+                              <button
+                                key={`${selectedLayoutModule.id}-${presetKey}`}
+                                type="button"
+                                onClick={() => applyModuleSizePreset(selectedLayoutModule.id, presetKey)}
+                                className="rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-xs font-semibold text-slate-200 transition-all hover:border-[#ff8bbf] hover:text-white"
+                              >
+                                {preset.label}
+                              </button>
+                            ))}
                           </div>
                         </div>
-                        <div className="p-6 grid grid-cols-2 md:grid-cols-6 gap-4">
-                          <div className="col-span-2 md:col-span-6 rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-                            <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Quick Controls</div>
-                            <div className="flex flex-wrap gap-3">
-                              <div className="flex items-center gap-2">
-                                <button onClick={() => moveGridModule(module.id, 0, -1)} className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200">
-                                  <ArrowUp size={16} />
-                                </button>
-                                <button onClick={() => moveGridModule(module.id, -1, 0)} className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200">
-                                  <ArrowLeft size={16} />
-                                </button>
-                                <button onClick={() => moveGridModule(module.id, 1, 0)} className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200">
-                                  <ArrowRight size={16} />
-                                </button>
-                                <button onClick={() => moveGridModule(module.id, 0, 1)} className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200">
-                                  <ArrowDown size={16} />
-                                </button>
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                {(Object.entries(MODULE_SIZE_PRESETS[module.type] || {})).map(([presetKey, preset]) => (
-                                  <button
-                                    key={`${module.id}-${presetKey}`}
-                                    onClick={() => applyModuleSizePreset(module.id, presetKey)}
-                                    className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200"
-                                  >
-                                    {preset.label}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
+
+                        <div className="grid grid-cols-2 gap-3">
                           {[
                             { key: 'x', label: 'X', min: 0, max: Math.max(0, currentGridLayout.columns - 1) },
                             { key: 'y', label: 'Y', min: 0, max: Math.max(0, currentGridLayout.rows - 1) },
                             { key: 'w', label: 'Width', min: 1, max: currentGridLayout.columns },
                             { key: 'h', label: 'Height', min: 1, max: currentGridLayout.rows },
                           ].map((field) => (
-                            <div key={`${module.id}-${field.key}`}>
-                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">{field.label}</label>
+                            <div key={`${selectedLayoutModule.id}-${field.key}`}>
+                              <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">{field.label}</label>
                               <input
                                 type="number"
                                 min={field.min}
                                 max={field.max}
-                                value={module[field.key] ?? field.min}
-                                onChange={(event) => updateGridModule(module.id, field.key, parseInt(event.target.value || `${field.min}`, 10))}
-                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                value={selectedLayoutModule[field.key] ?? field.min}
+                                onChange={(event) => updateGridModule(selectedLayoutModule.id, field.key, parseInt(event.target.value || `${field.min}`, 10))}
+                                className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
                               />
                             </div>
                           ))}
-                          {isRotator ? (
-                            <>
-                              <div className="col-span-2 md:col-span-3">
-                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Rotation Speed</label>
-                                <input
-                                  type="number"
-                                  min="3"
-                                  max="120"
-                                  value={rotatorConfig.rotationSeconds}
-                                  onChange={(event) => updateRotatorConfig(module.id, 'rotationSeconds', parseInt(event.target.value || '10', 10))}
-                                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                                />
-                              </div>
-                              <div className="col-span-2 md:col-span-3">
-                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Animation</label>
-                                <select
-                                  value={rotatorConfig.animation}
-                                  onChange={(event) => updateRotatorConfig(module.id, 'animation', event.target.value)}
-                                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                                >
-                                  {ROTATOR_ANIMATION_OPTIONS.map((option) => (
-                                    <option key={option.id} value={option.id}>{option.label}</option>
-                                  ))}
-                                </select>
-                              </div>
-                              <div className="col-span-2 md:col-span-6 rounded-xl border border-slate-800 bg-slate-950/60 p-4 space-y-4">
-                                <div className="flex items-center justify-between gap-4">
-                                  <div>
-                                    <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">Contained Modules</div>
-                                    <div className="text-xs text-slate-500 mt-1">Each page inherits this container&apos;s x, y, width, and height. Only page alignment stays editable.</div>
-                                  </div>
-                                  {rotatorConfig.modules.length < 3 && (
-                                    <select
-                                      value=""
-                                      onChange={(event) => event.target.value && addRotatorChildModule(module.id, event.target.value)}
-                                      className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                                    >
-                                      <option value="" disabled>Add page</option>
-                                      {ROTATABLE_MODULE_TYPES.map((moduleType) => (
-                                        <option key={`${module.id}-${moduleType.id}`} value={moduleType.id}>{moduleType.label}</option>
-                                      ))}
-                                    </select>
-                                  )}
-                                </div>
-                                <div className="space-y-3">
-                                  {rotatorConfig.modules.map((childModule, childIndex) => (
-                                    <div key={childModule.id} className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-                                      <div className="flex items-start justify-between gap-4">
-                                        <div>
-                                          <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Page {childIndex + 1}</div>
-                                          <div className="mt-1 text-sm font-semibold text-slate-200">{MODULE_TYPES.find((item) => item.id === childModule.type)?.label || childModule.type}</div>
-                                          <div className="mt-1 text-xs text-slate-500">Inherited geometry: ({module.x}, {module.y}) • {module.w} x {module.h}</div>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                          <span className="rounded-full border border-slate-700 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Locked bounds</span>
-                                          <button
-                                            type="button"
-                                            disabled={rotatorConfig.modules.length <= 1}
-                                            onClick={() => removeRotatorChildModule(module.id, childModule.id)}
-                                            className="text-slate-500 hover:text-red-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                                          >
-                                            <Trash2 size={16} />
-                                          </button>
-                                        </div>
-                                      </div>
-                                      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div>
-                                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Module</label>
-                                          <select
-                                            value={childModule.type}
-                                            onChange={(event) => updateRotatorChildModule(module.id, childModule.id, { type: event.target.value })}
-                                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                                          >
-                                            {ROTATABLE_MODULE_TYPES.map((moduleType) => (
-                                              <option key={`${childModule.id}-${moduleType.id}`} value={moduleType.id}>{moduleType.label}</option>
-                                            ))}
-                                          </select>
-                                        </div>
-                                        <div>
-                                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Alignment</label>
-                                          <select
-                                            value={childModule.align || 'stretch'}
-                                            onChange={(event) => updateRotatorChildModule(module.id, childModule.id, { align: event.target.value })}
-                                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                                          >
-                                            <option value="stretch">Stretch</option>
-                                            <option value="start">Top Left</option>
-                                            <option value="center">Center</option>
-                                            <option value="end">Bottom Right</option>
-                                          </select>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            </>
-                          ) : (
-                            <div className="col-span-2">
-                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Alignment</label>
-                              <select
-                                value={module.align || 'stretch'}
-                                onChange={(event) => updateGridModule(module.id, 'align', event.target.value)}
-                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                              >
-                                <option value="stretch">Stretch</option>
-                                <option value="start">Top Left</option>
-                                <option value="center">Center</option>
-                                <option value="end">Bottom Right</option>
-                              </select>
-                            </div>
-                          )}
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
 
-              <div className="w-full lg:w-80 shrink-0">
-                <div className="sticky top-8">
-                  <div className="flex items-center gap-2 mb-4 text-slate-400">
-                    <Info size={16} />
-                    <span className="text-xs font-bold uppercase tracking-wider">Live Layout Preview</span>
-                  </div>
-                  <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-4 mb-4 space-y-3">
-                    <div>
-                      <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Selected Module</div>
-                      <div className="text-sm text-white mt-1">
-                        {selectedLayoutModule
-                          ? MODULE_TYPES.find((item) => item.id === selectedLayoutModule.type)?.label || selectedLayoutModule.type
-                          : 'No module selected'}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <div className="rounded-xl bg-slate-950/70 border border-slate-800 p-3">
-                        <div className="text-slate-500 uppercase font-bold tracking-wider">Occupied</div>
-                        <div className="text-white text-lg font-semibold mt-1">
-                          {currentGridDiagnostics.occupiedCellCount} / {currentGridLayout.columns * currentGridLayout.rows}
+                        <div>
+                          <div className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-500">Nudge</div>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => moveGridModule(selectedLayoutModule.id, 0, -1)} className="rounded-xl bg-slate-800 p-3 text-slate-100 transition-all hover:bg-slate-700"><ArrowUp size={16} /></button>
+                            <button onClick={() => moveGridModule(selectedLayoutModule.id, -1, 0)} className="rounded-xl bg-slate-800 p-3 text-slate-100 transition-all hover:bg-slate-700"><ArrowLeft size={16} /></button>
+                            <button onClick={() => moveGridModule(selectedLayoutModule.id, 1, 0)} className="rounded-xl bg-slate-800 p-3 text-slate-100 transition-all hover:bg-slate-700"><ArrowRight size={16} /></button>
+                            <button onClick={() => moveGridModule(selectedLayoutModule.id, 0, 1)} className="rounded-xl bg-slate-800 p-3 text-slate-100 transition-all hover:bg-slate-700"><ArrowDown size={16} /></button>
+                          </div>
                         </div>
-                      </div>
-                      <div className="rounded-xl bg-slate-950/70 border border-slate-800 p-3">
-                        <div className="text-slate-500 uppercase font-bold tracking-wider">Conflicts</div>
-                        <div className={`text-lg font-semibold mt-1 ${currentGridDiagnostics.overlappingCellCount > 0 ? 'text-amber-300' : 'text-white'}`}>
-                          {currentGridDiagnostics.overlappingCellCount}
+
+                        {selectedLayoutModule.type !== 'module_rotator' && (
+                          <div>
+                            <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Alignment</label>
+                            <select
+                              value={selectedLayoutModule.align || 'stretch'}
+                              onChange={(event) => updateGridModule(selectedLayoutModule.id, 'align', event.target.value)}
+                              className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+                            >
+                              <option value="stretch">Stretch</option>
+                              <option value="start">Top Left</option>
+                              <option value="center">Center</option>
+                              <option value="end">Bottom Right</option>
+                            </select>
+                          </div>
+                        )}
+
+                        <div>
+                          <div className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-500">Module Settings</div>
+                          {renderModuleSpecificInspector()}
                         </div>
-                      </div>
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      Click a module card to select it, then click a preview cell to place it. You can also drag modules directly in the preview and resize them from the lower-right handle.
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      Preview resolution: {resolvedPreviewResolution.width}x{resolvedPreviewResolution.height} ({resolvedPreviewResolution.label})
-                    </div>
-                    {currentGridDiagnostics.overlapIds.length > 0 && (
-                      <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                        {currentGridDiagnostics.overlapIds.length} module{currentGridDiagnostics.overlapIds.length === 1 ? '' : 's'} currently overlap.
                       </div>
                     )}
-                  </div>
-                  <MirrorPreview
-                    config={config}
-                    resolution={resolvedPreviewResolution}
-                    selectedModuleId={selectedLayoutModuleId}
-                    occupancy={currentGridDiagnostics.occupancy}
-                    overlapModuleIds={currentGridDiagnostics.overlapIds}
-                    onSelectModule={setSelectedLayoutModuleId}
-                    onPlaceModule={(moduleId, x, y) => (moduleId || selectedLayoutModuleId) && placeGridModule(moduleId || selectedLayoutModuleId, x, y)}
-                    onResizeModule={(moduleId, width, height) => resizeGridModule(moduleId, width, height)}
-                  />
-                </div>
+
+                    {!selectedLayoutModule && (
+                      <div className="mt-6 rounded-2xl border border-dashed border-slate-800 bg-slate-950/40 p-5 text-sm text-slate-500">
+                        Click a module in the preview or layers list to populate the inspector.
+                      </div>
+                    )}
+                  </section>
+                </aside>
               </div>
             </div>
           )}

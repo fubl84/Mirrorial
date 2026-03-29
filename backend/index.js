@@ -171,6 +171,22 @@ const DEFAULT_CONFIG = {
     gap: 16,
     modules: [],
   },
+  gridLayouts: {
+    portrait: {
+      template: 'portrait_focus',
+      columns: 4,
+      rows: 8,
+      gap: 16,
+      modules: [],
+    },
+    landscape: {
+      template: 'landscape_dashboard',
+      columns: 6,
+      rows: 4,
+      gap: 16,
+      modules: [],
+    },
+  },
   moduleSettings: {
     clock: buildDefaultModuleConfig('clock'),
     weather: buildDefaultModuleConfig('weather'),
@@ -361,6 +377,42 @@ const normalizeLayoutModule = (module, moduleSettings = null) => {
   return module;
 };
 
+const TEMPLATE_ORIENTATION = new Map([
+  ['portrait_focus', 'portrait'],
+  ['portrait_compact', 'portrait'],
+  ['landscape_dashboard', 'landscape'],
+]);
+
+const getTemplateOrientation = (templateId) => TEMPLATE_ORIENTATION.get(templateId) || 'portrait';
+
+const normalizeSingleGridLayout = (gridLayout, moduleSettings, fallbackLayout) => {
+  const source = gridLayout && typeof gridLayout === 'object' ? gridLayout : fallbackLayout;
+  const base = source && typeof source === 'object' ? source : fallbackLayout;
+
+  return {
+    template: base.template || fallbackLayout.template,
+    columns: Number(base.columns) || fallbackLayout.columns,
+    rows: Number(base.rows) || fallbackLayout.rows,
+    gap: Number(base.gap) || fallbackLayout.gap,
+    modules: Array.isArray(base.modules)
+      ? base.modules.map((module) => normalizeLayoutModule(module, moduleSettings))
+      : clone(fallbackLayout.modules),
+  };
+};
+
+const collectGridLayoutModules = (gridLayouts, fallbackGridLayout) => {
+  if (gridLayouts && typeof gridLayouts === 'object') {
+    const modules = Object.values(gridLayouts).flatMap((layout) => (
+      Array.isArray(layout?.modules) ? layout.modules : []
+    ));
+    if (modules.length) {
+      return modules;
+    }
+  }
+
+  return Array.isArray(fallbackGridLayout?.modules) ? fallbackGridLayout.modules : [];
+};
+
 const sanitizeHomeAssistantUrl = (value = '') => value.toString().trim().replace(/\/+$/, '');
 
 const fetchHomeAssistantEntities = async ({ url, token }) => {
@@ -416,20 +468,31 @@ const ensureConfig = async () => {
 
 const normalizeConfig = (rawConfig = {}) => {
   const config = deepMerge(clone(DEFAULT_CONFIG), rawConfig);
-  const rawLayoutModules = Array.isArray(config.gridLayout?.modules) ? config.gridLayout.modules : [];
+  const fallbackGridLayout = config.gridLayout && typeof config.gridLayout === 'object'
+    ? config.gridLayout
+    : clone(DEFAULT_CONFIG.gridLayout);
+  const rawGridLayouts = rawConfig?.gridLayouts && typeof rawConfig.gridLayouts === 'object'
+    ? rawConfig.gridLayouts
+    : {};
+  const legacyOrientation = getTemplateOrientation(rawConfig?.gridLayout?.template || fallbackGridLayout.template);
+  const rawLayoutModules = collectGridLayoutModules(rawGridLayouts, fallbackGridLayout);
   const rawModuleSettings = rawConfig?.moduleSettings && typeof rawConfig.moduleSettings === 'object'
     ? rawConfig.moduleSettings
     : {};
   config.moduleSettings = normalizeModuleSettings(rawModuleSettings, rawLayoutModules);
-  config.gridLayout = config.gridLayout && typeof config.gridLayout === 'object'
-    ? {
-      template: config.gridLayout.template || 'portrait_focus',
-      columns: Number(config.gridLayout.columns) || 4,
-      rows: Number(config.gridLayout.rows) || 8,
-      gap: Number(config.gridLayout.gap) || 16,
-      modules: rawLayoutModules.map((module) => normalizeLayoutModule(module, config.moduleSettings)),
-    }
-    : clone(DEFAULT_CONFIG.gridLayout);
+  config.gridLayouts = {
+    portrait: normalizeSingleGridLayout(
+      rawGridLayouts.portrait || (legacyOrientation === 'portrait' ? fallbackGridLayout : null),
+      config.moduleSettings,
+      DEFAULT_CONFIG.gridLayouts.portrait,
+    ),
+    landscape: normalizeSingleGridLayout(
+      rawGridLayouts.landscape || (legacyOrientation === 'landscape' ? fallbackGridLayout : null),
+      config.moduleSettings,
+      DEFAULT_CONFIG.gridLayouts.landscape,
+    ),
+  };
+  config.gridLayout = clone(config.gridLayouts.portrait);
 
   const calendarModule = getAllModules(config)
     .find((module) => module.type === 'calendar');
@@ -446,7 +509,7 @@ const normalizeConfig = (rawConfig = {}) => {
 };
 
 const getAllModules = (config) => {
-  const gridModules = config?.gridLayout?.modules;
+  const gridModules = collectGridLayoutModules(config?.gridLayouts, config?.gridLayout);
   if (Array.isArray(gridModules)) {
     return gridModules.flatMap((module) => {
       if (!module || typeof module !== 'object') {

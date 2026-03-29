@@ -9,25 +9,31 @@ import 'modules/rotating_module_container.dart';
 class FlexGrid extends ConsumerWidget {
   const FlexGrid({super.key});
 
+  static const Map<String, ({int columns, int rows})> _legacyReference = {
+    'portrait': (columns: 4, rows: 8),
+    'landscape': (columns: 6, rows: 4),
+  };
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final configAsync = ref.watch(configStreamProvider);
 
     return configAsync.when(
       data: (config) {
-        final grid = normalizeGridLayout(config);
-        final columns = grid['columns'] as int;
-        final rows = grid['rows'] as int;
-        final gap = (grid['gap'] as num).toDouble();
-        final modules = (grid['modules'] as List).whereType<Map<String, dynamic>>().toList();
-
         return LayoutBuilder(
           builder: (context, constraints) {
+            final orientation = constraints.maxWidth > constraints.maxHeight ? 'landscape' : 'portrait';
+            final grid = normalizeGridLayout(config, orientation: orientation);
+            final columns = grid['columns'] as int;
+            final rows = grid['rows'] as int;
+            final gap = (grid['gap'] as num).toDouble();
+            final modules = (grid['modules'] as List).whereType<Map<String, dynamic>>().toList();
             final contentWidth = constraints.maxWidth.isFinite ? constraints.maxWidth : MediaQuery.of(context).size.width;
             final contentHeight = constraints.maxHeight.isFinite ? constraints.maxHeight : MediaQuery.of(context).size.height;
             final safeGap = gap.clamp(0, 48);
             final cellWidth = math.max(1.0, (contentWidth - ((columns + 1) * safeGap)) / columns);
             final cellHeight = math.max(1.0, (contentHeight - ((rows + 1) * safeGap)) / rows);
+            final legacyReference = _legacyReference[orientation] ?? _legacyReference['portrait']!;
 
             return Stack(
               children: modules.map((module) {
@@ -35,14 +41,16 @@ class FlexGrid extends ConsumerWidget {
                 final y = (module['y'] as num?)?.toInt() ?? 0;
                 final w = math.max(1, (module['w'] as num?)?.toInt() ?? 1);
                 final h = math.max(1, (module['h'] as num?)?.toInt() ?? 1);
+                final logicalWidthUnits = math.max(1, ((w / columns) * legacyReference.columns).round());
+                final logicalHeightUnits = math.max(1, ((h / rows) * legacyReference.rows).round());
                 final align = module['align']?.toString() ?? 'stretch';
                 final left = safeGap + (x * (cellWidth + safeGap));
                 final top = safeGap + (y * (cellHeight + safeGap));
                 final width = (w * cellWidth) + ((w - 1) * safeGap);
                 final height = (h * cellHeight) + ((h - 1) * safeGap);
                 final layoutData = ModuleLayoutData(
-                  widthUnits: w,
-                  heightUnits: h,
+                  widthUnits: logicalWidthUnits,
+                  heightUnits: logicalHeightUnits,
                   align: align,
                   bounds: Rect.fromLTWH(left, top, width, height),
                 );

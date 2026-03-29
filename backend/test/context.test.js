@@ -196,6 +196,31 @@ test('normalizeConfig migrates legacy layout-only module config into moduleSetti
   assert.equal(normalized.gridLayout.modules[0].config.token, 'legacy-token');
 });
 
+test('normalizeConfig preserves separate portrait and landscape layouts', () => {
+  const normalized = normalizeConfig({
+    gridLayouts: {
+      portrait: {
+        template: 'portrait_focus',
+        columns: 4,
+        rows: 8,
+        gap: 16,
+        modules: [{ id: 'clock_portrait', type: 'clock', x: 0, y: 0, w: 2, h: 2 }],
+      },
+      landscape: {
+        template: 'landscape_dashboard',
+        columns: 6,
+        rows: 4,
+        gap: 16,
+        modules: [{ id: 'clock_landscape', type: 'clock', x: 0, y: 0, w: 2, h: 2 }],
+      },
+    },
+  });
+
+  assert.equal(normalized.gridLayouts.portrait.modules[0].id, 'clock_portrait');
+  assert.equal(normalized.gridLayouts.landscape.modules[0].id, 'clock_landscape');
+  assert.equal(normalized.gridLayout.modules[0].id, 'clock_portrait');
+});
+
 test('inferTripAnchorFromEvent suppresses home-address-like destinations unless explicitly useful', () => {
   const plainAddressEvent = {
     id: 'evt_plain_address',

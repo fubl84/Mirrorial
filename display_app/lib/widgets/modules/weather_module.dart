@@ -82,15 +82,16 @@ _WeatherVariant _resolveWeatherVariant(BoxConstraints constraints, ModuleLayoutD
   final width = constraints.maxWidth.isFinite ? constraints.maxWidth : (layoutData?.bounds.width ?? 0);
   final height = constraints.maxHeight.isFinite ? constraints.maxHeight : (layoutData?.bounds.height ?? 0);
   final aspect = width / math.max(height, 1);
+  final density = layoutData?.density ?? ModuleVisualDensity.medium;
 
-  if ((layoutData?.density ?? ModuleVisualDensity.medium) == ModuleVisualDensity.compact || height < 140) {
+  if (density == ModuleVisualDensity.compact || height < 140 || width < 260) {
     return _WeatherVariant.compact;
   }
-  if (aspect >= 2.2) {
-    return _WeatherVariant.panorama;
-  }
-  if ((layoutData?.density ?? ModuleVisualDensity.medium) == ModuleVisualDensity.expanded && height >= 340) {
+  if (density == ModuleVisualDensity.expanded && width >= 900 && height >= 420) {
     return _WeatherVariant.hero;
+  }
+  if (aspect >= 2.4 && width >= 1180 && height >= 220) {
+    return _WeatherVariant.panorama;
   }
   return _WeatherVariant.card;
 }
@@ -104,11 +105,11 @@ int _forecastCountForVariant(_WeatherVariant variant, double width, int availabl
     case _WeatherVariant.compact:
       return 0;
     case _WeatherVariant.card:
-      return math.min(3, availableItems);
+      return math.min(width >= 760 ? 3 : 2, availableItems);
     case _WeatherVariant.panorama:
-      return math.min(width >= 1100 ? 7 : 5, availableItems);
+      return math.min(math.max(4, ((width + 10) / 170).floor()), availableItems);
     case _WeatherVariant.hero:
-      return math.min(width >= 900 ? 6 : 5, availableItems);
+      return math.min(math.max(4, ((width + 10) / 180).floor()), availableItems);
   }
 }
 
