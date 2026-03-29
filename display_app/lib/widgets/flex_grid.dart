@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../layout/layout_helpers.dart';
 import '../services/config_service.dart';
 import '../module_registry.dart';
+import 'modules/rotating_module_container.dart';
 
 class FlexGrid extends ConsumerWidget {
   const FlexGrid({super.key});
@@ -53,12 +54,18 @@ class FlexGrid extends ConsumerWidget {
                   height: height,
                   child: _ModuleShell(
                     align: align,
-                    child: buildModuleFromRegistry(
-                      module['type']?.toString() ?? '',
-                      (module['config'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{},
-                      layoutData: layoutData,
-                      rootConfig: config,
-                    ),
+                    child: module['type']?.toString() == 'module_rotator'
+                        ? RotatingModuleContainer(
+                            config: (module['config'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{},
+                            layoutData: layoutData,
+                            rootConfig: config,
+                          )
+                        : buildModuleFromRegistry(
+                            module['type']?.toString() ?? '',
+                            (module['config'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{},
+                            layoutData: layoutData,
+                            rootConfig: config,
+                          ),
                   ),
                 );
               }).toList(),

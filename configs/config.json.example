@@ -134,10 +134,68 @@
           "url": "http://homeassistant.local:8123",
           "token": "",
           "entities": [
-            "sensor.temperature"
+            "sensor.temperature",
+            "light.living_room"
+          ],
+          "entityCards": [
+            {
+              "entityId": "sensor.temperature",
+              "icon": "thermometer",
+              "displayType": "medium"
+            },
+            {
+              "entityId": "light.living_room",
+              "icon": "lightbulb",
+              "displayType": "small"
+            }
           ]
         }
       }
     ]
+  },
+  "moduleSettings": {
+    "clock": {},
+    "weather": {
+      "provider": "open-meteo",
+      "lat": 52.52,
+      "lon": 13.41,
+      "refreshMinutes": 30,
+      "location": "Berlin",
+      "displayName": "Berlin",
+      "city": "Berlin",
+      "postalCode": "",
+      "country": "Germany"
+    },
+    "home_assistant": {
+      "enabled": true,
+      "url": "http://homeassistant.local:8123",
+      "token": "",
+      "entities": [
+        "sensor.temperature",
+        "light.living_room"
+      ],
+      "entityCards": [
+        {
+          "entityId": "sensor.temperature",
+          "icon": "thermometer",
+          "displayType": "medium"
+        },
+        {
+          "entityId": "light.living_room",
+          "icon": "lightbulb",
+          "displayType": "small"
+        }
+      ]
+    },
+    "calendar": {
+      "maxItems": 5,
+      "viewMode": "list",
+      "daysToShow": 4,
+      "calendarColors": {}
+    },
+    "daily_brief": {
+      "maxItems": 3,
+      "pageSeconds": 10
+    }
   }
 }

@@ -4,15 +4,45 @@ import 'package:http/http.dart' as http;
 import 'config_service.dart';
 import 'display_preferences.dart';
 
+class BriefCard {
+  final String id;
+  final String kind;
+  final String headline;
+  final String householdView;
+  final List<String> bullets;
+
+  BriefCard({
+    required this.id,
+    required this.kind,
+    required this.headline,
+    required this.householdView,
+    required this.bullets,
+  });
+
+  factory BriefCard.fromJson(Map<String, dynamic> json) {
+    return BriefCard(
+      id: json['id']?.toString() ?? '',
+      kind: json['kind']?.toString() ?? '',
+      headline: json['headline']?.toString() ?? 'Daily brief',
+      householdView: json['householdView']?.toString() ?? '',
+      bullets: (json['bullets'] as List? ?? []).map((item) => item.toString()).toList(),
+    );
+  }
+}
+
 class DailyBrief {
   final String headline;
   final List<String> bullets;
   final String householdView;
+  final List<BriefCard> items;
+  final String source;
 
   DailyBrief({
     required this.headline,
     required this.bullets,
     required this.householdView,
+    required this.items,
+    required this.source,
   });
 
   factory DailyBrief.fromJson(Map<String, dynamic> json) {
@@ -20,6 +50,11 @@ class DailyBrief {
       headline: json['headline'] ?? 'Daily brief',
       bullets: (json['bullets'] as List? ?? []).map((item) => item.toString()).toList(),
       householdView: json['householdView'] ?? '',
+      items: (json['items'] as List? ?? [])
+          .whereType<Map>()
+          .map((item) => BriefCard.fromJson(item.cast<String, dynamic>()))
+          .toList(),
+      source: json['source']?.toString() ?? 'deterministic',
     );
   }
 }
@@ -28,6 +63,8 @@ class TripContext {
   final String destination;
   final String start;
   final String end;
+  final String? timezone;
+  final int? utcOffsetMinutes;
   final String? weatherLabel;
   final String? currentTime;
   final String transportSummary;
@@ -39,6 +76,8 @@ class TripContext {
     required this.destination,
     required this.start,
     required this.end,
+    this.timezone,
+    this.utcOffsetMinutes,
     this.weatherLabel,
     this.currentTime,
     required this.transportSummary,
@@ -60,6 +99,8 @@ class TripContext {
       destination: json['destination'] ?? '',
       start: json['start'] ?? '',
       end: json['end'] ?? '',
+      timezone: enrichment?['timezone']?.toString(),
+      utcOffsetMinutes: enrichment?['utcOffsetMinutes'] is num ? (enrichment?['utcOffsetMinutes'] as num).toInt() : null,
       weatherLabel: forecast?['label'],
       currentTime: enrichment?['currentTime'],
       transportSummary: json['transportSummary'] ?? '',
@@ -117,7 +158,7 @@ class ContextService {
     if (response.statusCode != 200) {
       return ContextSnapshot(
         updatedAt: null,
-        brief: DailyBrief(headline: 'Daily brief', bullets: [], householdView: ''),
+        brief: DailyBrief(headline: 'Daily brief', bullets: [], householdView: '', items: const [], source: 'deterministic'),
         activeTrip: null,
       );
     }
@@ -133,7 +174,7 @@ class ContextService {
       } catch (_) {
         yield ContextSnapshot(
           updatedAt: null,
-          brief: DailyBrief(headline: 'Daily brief', bullets: [], householdView: ''),
+          brief: DailyBrief(headline: 'Daily brief', bullets: [], householdView: '', items: const [], source: 'deterministic'),
           activeTrip: null,
         );
       }

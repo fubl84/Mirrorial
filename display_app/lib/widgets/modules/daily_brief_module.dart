@@ -26,25 +26,38 @@ class DailyBriefModule extends ConsumerWidget {
         return LayoutBuilder(
           builder: (context, constraints) {
             final pageSize = _pageSizeForLayout(constraints.maxHeight, density, config);
-            final householdView = snapshot.brief.householdView.trim();
-            final tripLine = _buildTripLine(snapshot.activeTrip, locale);
-            final showTripLine = tripLine.isNotEmpty && tripLine != householdView;
-            final items = <_BriefItem>[
-              if (householdView.isNotEmpty) _BriefItem(type: _BriefItemType.primary, text: householdView),
-              if (showTripLine) _BriefItem(type: _BriefItemType.secondary, text: tripLine),
-              ...snapshot.brief.bullets
-                  .where((bullet) => bullet.trim().isNotEmpty)
-                  .map((bullet) => _BriefItem(type: _BriefItemType.bullet, text: bullet)),
-            ];
-
-            final pages = _chunkItems(items, pageSize);
+            final prefersTopLevelBrief = snapshot.brief.source == 'llm';
+            final pages = !prefersTopLevelBrief && snapshot.brief.items.isNotEmpty
+                ? snapshot.brief.items
+                    .map((card) => _BriefPageData(
+                          headline: card.headline,
+                          items: [
+                            if (card.householdView.trim().isNotEmpty) _BriefItem(type: _BriefItemType.primary, text: card.householdView.trim()),
+                            ...card.bullets
+                                .where((bullet) => bullet.trim().isNotEmpty)
+                                .map((bullet) => _BriefItem(type: _BriefItemType.bullet, text: bullet)),
+                          ],
+                        ))
+                    .where((page) => page.items.isNotEmpty)
+                    .toList()
+                : _buildLegacyPages(
+                    snapshot,
+                    locale,
+                    pageSize,
+                    includeTripLine: !prefersTopLevelBrief,
+                  );
             final updatedLabel = snapshot.updatedAt != null
                 ? '${translateDisplayLabel('updated', locale)} ${formatClockTime(DateTime.parse(snapshot.updatedAt!).toLocal(), locale, use24HourFormat: use24HourFormat)}'
                 : null;
 
             return _BriefPager(
-              headline: snapshot.brief.headline,
               pages: pages,
+              footer: _buildTripLocalTimeFooter(
+                snapshot.activeTrip,
+                snapshot.updatedAt,
+                locale,
+                use24HourFormat,
+              ),
               updatedLabel: updatedLabel,
               emptyLabel: translateDisplayLabel('no_brief', locale),
               density: density,
@@ -82,7 +95,6 @@ class DailyBriefModule extends ConsumerWidget {
     final extras = <String>[
       if (trip.transportLifecycleLabel.isNotEmpty) trip.transportLifecycleLabel,
       if (trip.weatherLabel != null && trip.weatherLabel!.isNotEmpty) trip.weatherLabel!,
-      if (trip.currentTime != null && trip.currentTime!.isNotEmpty) 'Local time ${trip.currentTime!}',
     ];
 
     final start = DateTime.tryParse(trip.start);
@@ -93,19 +105,57 @@ class DailyBriefModule extends ConsumerWidget {
     final suffix = extras.isEmpty ? '' : ' • ${extras.join(' • ')}';
     return '${trip.destination} • $dateLabel$suffix';
   }
+
+  List<_BriefPageData> _buildLegacyPages(ContextSnapshot snapshot, String locale, int pageSize, {bool includeTripLine = true}) {
+    final householdView = snapshot.brief.householdView.trim();
+    final tripLine = _buildTripLine(snapshot.activeTrip, locale);
+    final showTripLine = includeTripLine && tripLine.isNotEmpty && tripLine != householdView;
+    final items = <_BriefItem>[
+      if (householdView.isNotEmpty) _BriefItem(type: _BriefItemType.primary, text: householdView),
+      if (showTripLine) _BriefItem(type: _BriefItemType.secondary, text: tripLine),
+      ...snapshot.brief.bullets
+          .where((bullet) => bullet.trim().isNotEmpty)
+          .map((bullet) => _BriefItem(type: _BriefItemType.bullet, text: bullet)),
+    ];
+
+    return _chunkItems(items, pageSize)
+        .map((pageItems) => _BriefPageData(headline: snapshot.brief.headline, items: pageItems))
+        .toList();
+  }
+
+  Widget? _buildTripLocalTimeFooter(TripContext? trip, String? snapshotUpdatedAt, String locale, bool use24HourFormat) {
+    if (trip == null) {
+      return null;
+    }
+
+    final hasLiveOffset = trip.utcOffsetMinutes != null;
+    final hasFallbackTime = trip.currentTime != null && trip.currentTime!.trim().isNotEmpty;
+    if (!hasLiveOffset && !hasFallbackTime) {
+      return null;
+    }
+
+    return _TripLocalTimeLabel(
+      destination: trip.destination,
+      locale: locale,
+      use24HourFormat: use24HourFormat,
+      utcOffsetMinutes: trip.utcOffsetMinutes,
+      fallbackTime: trip.currentTime,
+      snapshotUpdatedAt: snapshotUpdatedAt,
+    );
+  }
 }
 
 class _BriefPager extends StatefulWidget {
-  final String headline;
-  final List<List<_BriefItem>> pages;
+  final List<_BriefPageData> pages;
+  final Widget? footer;
   final String? updatedLabel;
   final String emptyLabel;
   final ModuleVisualDensity density;
   final int pageSeconds;
 
   const _BriefPager({
-    required this.headline,
     required this.pages,
+    required this.footer,
     required this.updatedLabel,
     required this.emptyLabel,
     required this.density,
@@ -160,14 +210,14 @@ class _BriefPagerState extends State<_BriefPager> {
   @override
   Widget build(BuildContext context) {
     final safeIndex = widget.pages.isEmpty ? 0 : (_pageIndex < widget.pages.length ? _pageIndex : 0);
-    final currentPage = widget.pages.isEmpty ? const <_BriefItem>[] : widget.pages[safeIndex];
+    final currentPage = widget.pages.isEmpty ? null : widget.pages[safeIndex];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (widget.density != ModuleVisualDensity.compact) ...[
           Text(
-            widget.headline,
+            currentPage?.headline ?? '',
             style: Theme.of(context).textTheme.titleLarge,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
@@ -175,7 +225,7 @@ class _BriefPagerState extends State<_BriefPager> {
           const SizedBox(height: 10),
         ],
         Expanded(
-          child: currentPage.isEmpty
+          child: currentPage == null || currentPage.items.isEmpty
               ? Align(
                   alignment: Alignment.topLeft,
                   child: Text(
@@ -186,12 +236,16 @@ class _BriefPagerState extends State<_BriefPager> {
               : AnimatedSwitcher(
                   duration: const Duration(milliseconds: 350),
                   child: _BriefPage(
-                    key: ValueKey('page-$_pageIndex-${currentPage.map((item) => item.text).join('|')}'),
-                    items: currentPage,
+                    key: ValueKey('page-$_pageIndex-${currentPage.items.map((item) => item.text).join('|')}'),
+                    items: currentPage.items,
                     density: widget.density,
                   ),
                 ),
         ),
+        if (widget.footer != null) ...[
+          const SizedBox(height: 8),
+          widget.footer!,
+        ],
         if (widget.updatedLabel != null || widget.pages.length > 1) ...[
           const SizedBox(height: 8),
           Row(
@@ -232,10 +286,12 @@ class _BriefPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return ListView.builder(
       key: key,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: items.map((item) {
+      padding: EdgeInsets.zero,
+      itemCount: items.length,
+      itemBuilder: (context, index) {
+        final item = items[index];
         final isPrimary = item.type == _BriefItemType.primary;
         final isSecondary = item.type == _BriefItemType.secondary;
         final isBullet = item.type == _BriefItemType.bullet;
@@ -262,7 +318,7 @@ class _BriefPage extends StatelessWidget {
               Expanded(
                 child: Text(
                   item.text,
-                  maxLines: isPrimary ? (density == ModuleVisualDensity.compact ? 3 : 4) : (isSecondary ? 2 : 3),
+                  maxLines: isPrimary ? (density == ModuleVisualDensity.compact ? 2 : 3) : (isSecondary ? 2 : 2),
                   overflow: TextOverflow.ellipsis,
                   style: isPrimary
                       ? Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600)
@@ -274,7 +330,117 @@ class _BriefPage extends StatelessWidget {
             ],
           ),
         );
-      }).toList(),
+      },
+    );
+  }
+}
+
+class _TripLocalTimeLabel extends StatefulWidget {
+  final String destination;
+  final String locale;
+  final bool use24HourFormat;
+  final int? utcOffsetMinutes;
+  final String? fallbackTime;
+  final String? snapshotUpdatedAt;
+
+  const _TripLocalTimeLabel({
+    required this.destination,
+    required this.locale,
+    required this.use24HourFormat,
+    required this.utcOffsetMinutes,
+    required this.fallbackTime,
+    required this.snapshotUpdatedAt,
+  });
+
+  @override
+  State<_TripLocalTimeLabel> createState() => _TripLocalTimeLabelState();
+}
+
+class _TripLocalTimeLabelState extends State<_TripLocalTimeLabel> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleTick();
+  }
+
+  @override
+  void didUpdateWidget(covariant _TripLocalTimeLabel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.utcOffsetMinutes != oldWidget.utcOffsetMinutes || widget.fallbackTime != oldWidget.fallbackTime) {
+      _scheduleTick();
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  void _scheduleTick() {
+    _timer?.cancel();
+    final now = DateTime.now();
+    final delay = const Duration(minutes: 1) - Duration(seconds: now.second, milliseconds: now.millisecond);
+    _timer = Timer(delay, () {
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+      _timer = Timer.periodic(const Duration(minutes: 1), (_) {
+        if (mounted) {
+          setState(() {});
+        }
+      });
+    });
+  }
+
+  DateTime? _resolveDestinationNow() {
+    if (widget.utcOffsetMinutes != null) {
+      return DateTime.now().toUtc().add(Duration(minutes: widget.utcOffsetMinutes!));
+    }
+
+    final fallbackTime = widget.fallbackTime?.trim() ?? '';
+    final updatedAt = widget.snapshotUpdatedAt;
+    if (!RegExp(r'^\d{2}:\d{2}$').hasMatch(fallbackTime) || updatedAt == null) {
+      return null;
+    }
+
+    final parts = fallbackTime.split(':');
+    final baseMinutes = (int.tryParse(parts[0]) ?? 0) * 60 + (int.tryParse(parts[1]) ?? 0);
+    final baseline = DateTime.tryParse(updatedAt);
+    if (baseline == null) {
+      return null;
+    }
+
+    final elapsedMinutes = DateTime.now().difference(baseline.toLocal()).inMinutes;
+    final totalMinutes = ((baseMinutes + elapsedMinutes) % (24 * 60) + (24 * 60)) % (24 * 60);
+    return DateTime.utc(1970, 1, 1, totalMinutes ~/ 60, totalMinutes % 60);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final destinationNow = _resolveDestinationNow();
+    if (destinationNow == null) {
+      return const SizedBox.shrink();
+    }
+
+    final labelPrefix = widget.locale == 'de' ? 'Ortszeit' : 'Local time';
+    final locationLabel = widget.destination.trim();
+    final timeLabel = formatClockTime(
+      destinationNow,
+      widget.locale,
+      use24HourFormat: widget.use24HourFormat,
+    );
+
+    return Text(
+      locationLabel.isNotEmpty
+          ? '$labelPrefix in $locationLabel: $timeLabel'
+          : '$labelPrefix: $timeLabel',
+      style: Theme.of(context).textTheme.bodyMedium,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
     );
   }
 }
@@ -305,6 +471,16 @@ class _BriefItem {
   final String text;
 
   const _BriefItem({required this.type, required this.text});
+}
+
+class _BriefPageData {
+  final String headline;
+  final List<_BriefItem> items;
+
+  const _BriefPageData({
+    required this.headline,
+    required this.items,
+  });
 }
 
 enum _BriefItemType {

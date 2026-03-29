@@ -31,6 +31,68 @@ const CALENDAR_SCOPES = [
 ];
 const GOOGLE_AUTH_STATES = new Map();
 const LOCAL_HOST_PATTERNS = ['localhost', '127.0.0.1', '::1'];
+const SHARED_MODULE_TYPES = new Set(['clock', 'weather', 'home_assistant', 'calendar', 'daily_brief']);
+
+const buildDefaultModuleConfig = (type) => {
+  switch (type) {
+    case 'weather':
+      return {
+        provider: 'open-meteo',
+        lat: 52.52,
+        lon: 13.41,
+        refreshMinutes: 30,
+        location: 'Berlin',
+        displayName: 'Berlin',
+        city: 'Berlin',
+        postalCode: '',
+        country: 'Germany',
+      };
+    case 'home_assistant':
+      return {
+        enabled: false,
+        url: '',
+        token: '',
+        entities: [],
+        entityCards: [],
+      };
+    case 'calendar':
+      return {
+        maxItems: 5,
+        viewMode: 'list',
+        daysToShow: 4,
+        calendarColors: {},
+      };
+    case 'daily_brief':
+      return {
+        maxItems: 3,
+        pageSeconds: 10,
+      };
+    default:
+      return {};
+  }
+};
+
+const findModuleByType = (modules, type) => {
+  for (const module of Array.isArray(modules) ? modules : []) {
+    if (!module || typeof module !== 'object') {
+      continue;
+    }
+
+    if (module.type === type) {
+      return module;
+    }
+
+    if (module.type === 'module_rotator') {
+      const nestedMatch = findModuleByType(module.config?.modules, type);
+      if (nestedMatch) {
+        return nestedMatch;
+      }
+    }
+  }
+
+  return null;
+};
+
 const DEFAULT_CONFIG = {
   system: {
     fps: 30,
@@ -62,7 +124,21 @@ const DEFAULT_CONFIG = {
     context: {
       refreshHours: 3,
       tripLookaheadDays: 14,
+      birthdayLookaheadDays: 10,
       usefulLocationWhitelist: [],
+      briefCalendarMode: 'exclude_selected',
+      briefIncludedCalendarIds: [],
+      briefExcludedCalendarIds: [],
+      suppressRoutineRecurringEvents: true,
+      signals: {
+        travel: true,
+        birthdays: true,
+        commute: true,
+        household: true,
+        visitors: true,
+        nextEvent: true,
+        highlights: true,
+      },
     },
     llm: {
       enabled: false,
@@ -94,6 +170,13 @@ const DEFAULT_CONFIG = {
     rows: 8,
     gap: 16,
     modules: [],
+  },
+  moduleSettings: {
+    clock: buildDefaultModuleConfig('clock'),
+    weather: buildDefaultModuleConfig('weather'),
+    home_assistant: buildDefaultModuleConfig('home_assistant'),
+    calendar: buildDefaultModuleConfig('calendar'),
+    daily_brief: buildDefaultModuleConfig('daily_brief'),
   },
 };
 
@@ -139,6 +222,177 @@ const deepMerge = (base, override) => {
   return result;
 };
 
+const normalizeHaEntityCard = (entry) => {
+  if (typeof entry === 'string') {
+    const entityId = entry.trim();
+    if (!entityId) {
+      return null;
+    }
+    return {
+      entityId,
+      icon: 'auto',
+      displayType: 'medium',
+    };
+  }
+
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+
+  const entityId = typeof entry.entityId === 'string'
+    ? entry.entityId.trim()
+    : (typeof entry.id === 'string' ? entry.id.trim() : '');
+
+  if (!entityId) {
+    return null;
+  }
+
+  const displayType = typeof entry.displayType === 'string' ? entry.displayType.trim().toLowerCase() : 'medium';
+  const normalizedDisplayType = ['small', 'medium', 'large'].includes(displayType) ? displayType : 'medium';
+  const icon = typeof entry.icon === 'string' && entry.icon.trim() ? entry.icon.trim() : 'auto';
+
+  return {
+    entityId,
+    icon,
+    displayType: normalizedDisplayType,
+  };
+};
+
+const normalizeHomeAssistantModuleConfig = (config = {}) => {
+  const legacyEntities = Array.isArray(config.entities) ? config.entities : [];
+  const configuredCards = Array.isArray(config.entityCards) ? config.entityCards : [];
+  const normalizedCards = (configuredCards.length ? configuredCards : legacyEntities)
+    .map((entry) => normalizeHaEntityCard(entry))
+    .filter(Boolean);
+
+  return {
+    ...config,
+    enabled: config.enabled !== false,
+    url: typeof config.url === 'string' ? config.url : '',
+    token: typeof config.token === 'string' ? config.token : '',
+    entities: normalizedCards.map((card) => card.entityId),
+    entityCards: normalizedCards,
+  };
+};
+
+const normalizeSharedModuleConfig = (type, config = {}) => {
+  if (type === 'home_assistant') {
+    return normalizeHomeAssistantModuleConfig(config);
+  }
+
+  const baseConfig = buildDefaultModuleConfig(type);
+  const incomingConfig = config && typeof config === 'object' ? config : {};
+  return {
+    ...baseConfig,
+    ...incomingConfig,
+  };
+};
+
+const normalizeModuleSettings = (moduleSettings = {}, layoutModules = []) => {
+  const source = moduleSettings && typeof moduleSettings === 'object' ? moduleSettings : {};
+  const normalized = {};
+
+  SHARED_MODULE_TYPES.forEach((type) => {
+    const storedConfig = source[type] && typeof source[type] === 'object'
+      ? source[type]
+      : findModuleByType(layoutModules, type)?.config;
+    normalized[type] = normalizeSharedModuleConfig(type, storedConfig);
+  });
+
+  return normalized;
+};
+
+const ROTATOR_ANIMATION_TYPES = new Set(['swipe', 'blend', 'lift', 'none']);
+const ROTATOR_CHILD_TYPES = new Set(['clock', 'weather', 'home_assistant', 'calendar', 'daily_brief']);
+
+const normalizeRotatorChildModule = (module, index = 0, moduleSettings = null) => {
+  const type = ROTATOR_CHILD_TYPES.has(module?.type) ? module.type : 'clock';
+  const align = ['stretch', 'start', 'center', 'end'].includes(module?.align) ? module.align : 'stretch';
+  const resolvedConfig = moduleSettings?.[type] && SHARED_MODULE_TYPES.has(type)
+    ? moduleSettings[type]
+    : module?.config;
+
+  return {
+    id: typeof module?.id === 'string' && module.id.trim() ? module.id.trim() : `rotator_${type}_${index + 1}`,
+    type,
+    align,
+    config: normalizeSharedModuleConfig(type, resolvedConfig),
+  };
+};
+
+const normalizeRotatorModuleConfig = (config = {}, moduleSettings = null) => {
+  const children = Array.isArray(config.modules) ? config.modules : [];
+  const normalizedChildren = children
+    .map((module, index) => normalizeRotatorChildModule(module, index, moduleSettings))
+    .slice(0, 3);
+
+  return {
+    rotationSeconds: Math.min(Math.max(Number(config.rotationSeconds) || 10, 3), 120),
+    animation: ROTATOR_ANIMATION_TYPES.has(config.animation) ? config.animation : 'swipe',
+    modules: normalizedChildren.length ? normalizedChildren : [normalizeRotatorChildModule({ type: 'clock' }, 0, moduleSettings)],
+  };
+};
+
+const normalizeLayoutModule = (module, moduleSettings = null) => {
+  if (!module || typeof module !== 'object') {
+    return module;
+  }
+
+  if (module.type === 'module_rotator') {
+    return {
+      ...module,
+      align: 'stretch',
+      config: normalizeRotatorModuleConfig(module.config && typeof module.config === 'object' ? module.config : {}, moduleSettings),
+    };
+  }
+
+  if (SHARED_MODULE_TYPES.has(module.type)) {
+    return {
+      ...module,
+      config: normalizeSharedModuleConfig(
+        module.type,
+        moduleSettings?.[module.type] && typeof moduleSettings[module.type] === 'object'
+          ? moduleSettings[module.type]
+          : (module.config && typeof module.config === 'object' ? module.config : {}),
+      ),
+    };
+  }
+
+  return module;
+};
+
+const sanitizeHomeAssistantUrl = (value = '') => value.toString().trim().replace(/\/+$/, '');
+
+const fetchHomeAssistantEntities = async ({ url, token }) => {
+  const normalizedUrl = sanitizeHomeAssistantUrl(url);
+  const normalizedToken = typeof token === 'string' ? token.trim() : '';
+
+  if (!normalizedUrl || !normalizedToken) {
+    throw new Error('HA URL and token must be provided.');
+  }
+
+  const response = await axios.get(`${normalizedUrl}/api/states`, {
+    headers: { Authorization: `Bearer ${normalizedToken}` },
+  });
+
+  return response.data
+    .map((entity) => {
+      const entityId = typeof entity.entity_id === 'string' ? entity.entity_id : '';
+      const attributes = entity.attributes && typeof entity.attributes === 'object' ? entity.attributes : {};
+      return {
+        id: entityId,
+        name: attributes.friendly_name || entityId,
+        state: entity.state,
+        domain: entityId.includes('.') ? entityId.split('.')[0] : 'other',
+        unit: attributes.unit_of_measurement || null,
+        deviceClass: attributes.device_class || null,
+        icon: attributes.icon || null,
+      };
+    })
+    .filter((entity) => entity.id)
+    .sort((left, right) => left.name.localeCompare(right.name));
+};
+
 const ensureRuntimePaths = async () => {
   await fs.ensureDir(DATA_ROOT);
   await fs.ensureDir(path.dirname(SECRETS_PATH));
@@ -162,13 +416,18 @@ const ensureConfig = async () => {
 
 const normalizeConfig = (rawConfig = {}) => {
   const config = deepMerge(clone(DEFAULT_CONFIG), rawConfig);
+  const rawLayoutModules = Array.isArray(config.gridLayout?.modules) ? config.gridLayout.modules : [];
+  const rawModuleSettings = rawConfig?.moduleSettings && typeof rawConfig.moduleSettings === 'object'
+    ? rawConfig.moduleSettings
+    : {};
+  config.moduleSettings = normalizeModuleSettings(rawModuleSettings, rawLayoutModules);
   config.gridLayout = config.gridLayout && typeof config.gridLayout === 'object'
     ? {
       template: config.gridLayout.template || 'portrait_focus',
       columns: Number(config.gridLayout.columns) || 4,
       rows: Number(config.gridLayout.rows) || 8,
       gap: Number(config.gridLayout.gap) || 16,
-      modules: Array.isArray(config.gridLayout.modules) ? config.gridLayout.modules : [],
+      modules: rawLayoutModules.map((module) => normalizeLayoutModule(module, config.moduleSettings)),
     }
     : clone(DEFAULT_CONFIG.gridLayout);
 
@@ -189,7 +448,18 @@ const normalizeConfig = (rawConfig = {}) => {
 const getAllModules = (config) => {
   const gridModules = config?.gridLayout?.modules;
   if (Array.isArray(gridModules)) {
-    return gridModules.filter((module) => module && typeof module === 'object');
+    return gridModules.flatMap((module) => {
+      if (!module || typeof module !== 'object') {
+        return [];
+      }
+
+      const normalizedModule = normalizeLayoutModule(module, config?.moduleSettings);
+      const nestedModules = normalizedModule.type === 'module_rotator'
+        ? (normalizedModule.config?.modules || []).map((nestedModule) => normalizeLayoutModule(nestedModule, config?.moduleSettings))
+        : [];
+
+      return [normalizedModule, ...nestedModules];
+    });
   }
 
   return [];
@@ -684,6 +954,55 @@ const weatherNeedsIndoorPlan = (code) => {
   return code >= 45;
 };
 
+const weatherCodeToBucket = (code) => {
+  if (code === 0) return 'clear';
+  if (code <= 3) return 'partly_cloudy';
+  if (code <= 48) return 'fog';
+  if (code <= 67) return 'rain';
+  if (code <= 77) return 'snow';
+  if (code <= 82) return 'showers';
+  return 'stormy';
+};
+
+const selectDominantWeatherCode = (codes = []) => {
+  const counts = new Map();
+  codes.forEach((code) => {
+    const bucket = weatherCodeToBucket(code);
+    const current = counts.get(bucket) || { count: 0, code };
+    counts.set(bucket, {
+      count: current.count + 1,
+      code: current.code,
+    });
+  });
+
+  return Array.from(counts.values())
+    .sort((left, right) => right.count - left.count)[0]?.code ?? codes[0];
+};
+
+const buildForecastNarrative = ({ dominantCode, minTemp, maxTemp, rainyDays, selectedDayCount, uniqueBuckets }) => {
+  const midpoint = Math.round((minTemp + maxTemp) / 2);
+  const dominantLabel = weatherCodeToLabel(dominantCode);
+  const stableWeather = uniqueBuckets <= 2;
+
+  if (selectedDayCount >= 3 && rainyDays === 0 && stableWeather) {
+    return `Looks consistent through the trip: around ${midpoint}C and mostly ${dominantLabel}.`;
+  }
+
+  if (selectedDayCount >= 3 && rainyDays === 1) {
+    return `Mostly ${dominantLabel} around ${midpoint}C, with one wetter day worth planning for.`;
+  }
+
+  if (selectedDayCount >= 3 && rainyDays >= 2) {
+    return `Mixed weather through the trip, around ${midpoint}C with rain likely on multiple days.`;
+  }
+
+  if (minTemp !== maxTemp) {
+    return `${minTemp}-${maxTemp}C and mostly ${dominantLabel}.`;
+  }
+
+  return `Around ${midpoint}C and ${dominantLabel}.`;
+};
+
 const summarizeForecast = (forecast, startDate, endDate) => {
   if (!forecast?.daily?.time?.length) {
     return null;
@@ -702,17 +1021,70 @@ const summarizeForecast = (forecast, startDate, endDate) => {
 
   const tempsMax = selectedIndexes.map((index) => forecast.daily.temperature_2m_max[index]).filter((value) => value !== undefined);
   const tempsMin = selectedIndexes.map((index) => forecast.daily.temperature_2m_min[index]).filter((value) => value !== undefined);
-  const codes = selectedIndexes.map((index) => forecast.daily.weathercode[index]).filter((value) => value !== undefined);
+  const dailyWeatherCodes = forecast.daily.weather_code || forecast.daily.weathercode || [];
+  const codes = selectedIndexes.map((index) => dailyWeatherCodes[index]).filter((value) => value !== undefined);
   const minTemp = Math.round(Math.min(...tempsMin));
   const maxTemp = Math.round(Math.max(...tempsMax));
-  const primaryCode = codes[0];
+  const primaryCode = selectDominantWeatherCode(codes);
+  const rainyDays = codes.filter((code) => ['rain', 'showers', 'stormy'].includes(weatherCodeToBucket(code))).length;
+  const uniqueBuckets = new Set(codes.map((code) => weatherCodeToBucket(code))).size;
+  const narrative = buildForecastNarrative({
+    dominantCode: primaryCode,
+    minTemp,
+    maxTemp,
+    rainyDays,
+    selectedDayCount: selectedIndexes.length,
+    uniqueBuckets,
+  });
 
   return {
     label: `${minTemp}-${maxTemp}C, ${weatherCodeToLabel(primaryCode)}`,
+    narrative,
     minTemp,
     maxTemp,
     weatherCode: primaryCode,
+    rainyDays,
+    dayCount: selectedIndexes.length,
   };
+};
+
+const getTimeZoneOffsetMinutes = (timeZone, date = new Date()) => {
+  if (!timeZone) {
+    return 0;
+  }
+
+  try {
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+
+    const parts = formatter.formatToParts(date).reduce((accumulator, part) => {
+      if (part.type !== 'literal') {
+        accumulator[part.type] = part.value;
+      }
+      return accumulator;
+    }, {});
+
+    const zonedTimestamp = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second),
+    );
+
+    return Math.round((zonedTimestamp - date.getTime()) / 60000);
+  } catch (error) {
+    return 0;
+  }
 };
 
 const tryFetchForecastForLocation = async (location, startDate, endDate) => {
@@ -725,7 +1097,8 @@ const tryFetchForecastForLocation = async (location, startDate, endDate) => {
       params: {
         latitude: location.latitude,
         longitude: location.longitude,
-        daily: 'weathercode,temperature_2m_max,temperature_2m_min',
+        daily: 'weather_code,temperature_2m_max,temperature_2m_min',
+        current: 'temperature_2m,weather_code',
         timezone: location.timezone || 'auto',
         forecast_days: 14,
       },
@@ -733,6 +1106,7 @@ const tryFetchForecastForLocation = async (location, startDate, endDate) => {
     });
 
     const forecast = summarizeForecast(forecastResponse.data, startDate, endDate);
+    const utcOffsetMinutes = getTimeZoneOffsetMinutes(location.timezone || 'UTC');
     const currentTime = new Intl.DateTimeFormat('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
@@ -740,10 +1114,25 @@ const tryFetchForecastForLocation = async (location, startDate, endDate) => {
       timeZone: location.timezone || 'UTC',
     }).format(new Date());
 
+    const current = forecastResponse.data?.current || forecastResponse.data?.current_weather || {};
+    const currentWeatherCode = Number(current.weather_code ?? current.weathercode);
+
     return {
       destination: location.label || location.name || '',
       timezone: location.timezone || 'UTC',
+      utcOffsetMinutes,
       currentTime,
+      currentWeather: current && Object.keys(current).length > 0
+        ? {
+          temp: Number.isFinite(Number(current.temperature_2m))
+            ? Math.round(Number(current.temperature_2m))
+            : null,
+          weatherCode: Number.isFinite(currentWeatherCode)
+            ? currentWeatherCode
+            : null,
+          label: Number.isFinite(currentWeatherCode) ? weatherCodeToLabel(currentWeatherCode) : '',
+        }
+        : null,
       forecast,
     };
   } catch (error) {
@@ -787,7 +1176,7 @@ const tryFetchDestinationWeather = async (destination, tripStart, tripEnd) => {
 };
 
 const findWeatherModuleConfig = (config) => getAllModules(config)
-  .find((module) => module.type === 'weather')?.config || null;
+  .find((module) => module.type === 'weather')?.config || config?.moduleSettings?.weather || null;
 
 const tryFetchHomeForecast = async (config, household, startDate, endDate) => {
   if (household?.home?.location?.latitude !== undefined && household?.home?.location?.longitude !== undefined) {
@@ -825,12 +1214,17 @@ const extractDestination = (event) => {
   }
 
   const title = (event.title || '').trim();
-  const tripMatch = title.match(/\b(?:to|in|at)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/);
+  const tripMatch = title.match(/\b(?:to|in|at|nach)\s+([A-ZÄÖÜ][\p{L}'-]+(?:\s+[A-ZÄÖÜ][\p{L}'-]+){0,2})\b/u);
   if (tripMatch) {
     return tripMatch[1];
   }
 
-  const trailingMatch = title.match(/[-:]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})$/);
+  const travelTitleMatch = title.match(/\b(?:dienstreise|reise|trip|travel|urlaub|business trip)\s+([A-ZÄÖÜ][\p{L}'-]+(?:\s+[A-ZÄÖÜ][\p{L}'-]+){0,2})$/iu);
+  if (travelTitleMatch) {
+    return travelTitleMatch[1];
+  }
+
+  const trailingMatch = title.match(/[-:]\s*([A-ZÄÖÜ][\p{L}'-]+(?:\s+[A-ZÄÖÜ][\p{L}'-]+){0,2})$/u);
   return trailingMatch ? trailingMatch[1] : '';
 };
 
@@ -840,7 +1234,7 @@ const ONLINE_EVENT_PATTERN = /\b(online|remote|zoom|teams|meet|webex)\b/i;
 const USEFUL_LOCATION_KEYWORD_PATTERN = /\b(hospital|clinic|doctor|praxis|arzt|schule|school|kita|kindergarten|daycare|museum|zoo|theater|theatre|cinema|concert|venue|arena|stadium|airport|bahnhof|station|terminal|hotel|embassy|consulate|university|campus|messe|expo|office|büro)\b/i;
 const GENERIC_DESTINATION_PATTERN = /^(school|schule|private|privat|work|office|home|zu hause|haus|kita|kindergarten|daycare|online|remote|meeting room|conference room|room)$/i;
 
-const TRAVEL_SIGNAL_PATTERN = /\b(trip|flight|summit|conference|meetup|travel|hotel|airport|train|boarding|arrival|departure)\b/i;
+const TRAVEL_SIGNAL_PATTERN = /\b(trip|reise|dienstreise|flight|flug|summit|conference|meetup|travel|hotel|airport|flughafen|train|zug|boarding|abflug|arrival|ankunft|departure)\b/i;
 const FLIGHT_NUMBER_PATTERN = /\b([A-Z]{2,3}\s?\d{2,4}[A-Z]?)\b/;
 const TRAIN_NUMBER_PATTERN = /\b(ICE|IC|EC|RE|RB|RJ|TGV|AVE|IR|S)\s?(\d{1,4})\b/i;
 const ROUTE_TEXT_PATTERN = /\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\s*[-–>]\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\b/;
@@ -1081,8 +1475,57 @@ const parseFlightIdentifier = (identifier) => {
   };
 };
 
+const normalizeMatchText = (value = '') => value
+  .toString()
+  .trim()
+  .toLowerCase()
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '');
+
+const inferTripTravelerLabel = (sourceEvents, household) => {
+  const members = Array.isArray(household?.members) ? household.members : [];
+  if (members.length === 0 || !Array.isArray(sourceEvents) || sourceEvents.length === 0) {
+    return '';
+  }
+
+  const combinedText = normalizeMatchText(sourceEvents
+    .map((event) => [event.title || '', event.description || '', event.location || '', event.calendarSummary || ''].join(' '))
+    .join(' '));
+
+  const scoredMembers = members
+    .filter((member) => member.shareInBrief !== false && member.name)
+    .map((member) => {
+      const identityTokens = Array.from(new Set([member.name, ...(Array.isArray(member.tags) ? member.tags : [])]
+        .map((token) => token?.toString().trim())
+        .filter(Boolean)));
+      const tokenMatch = identityTokens.find((token) => combinedText.includes(normalizeMatchText(token)));
+      const calendarMatches = sourceEvents.filter((event) => Array.isArray(member.calendarIds) && member.calendarIds.includes(event.calendarId)).length;
+      const score = (calendarMatches * 5) + (tokenMatch ? 3 : 0);
+
+      return {
+        member,
+        score,
+        tokenMatch,
+        calendarMatches,
+      };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  const best = scoredMembers[0];
+  if (!best) {
+    return '';
+  }
+
+  if (best.tokenMatch && best.tokenMatch !== best.member.name && best.tokenMatch.length >= 3) {
+    return best.tokenMatch;
+  }
+
+  return best.member.name || '';
+};
+
 const TRIP_INTENT_KEYWORDS = {
-  business_trip: /\b(work|business|conference|summit|client|meeting|internal team|onsite|offsite|expo|messe|teacher summit)\b/i,
+  business_trip: /\b(work|business|conference|summit|client|meeting|internal team|onsite|offsite|expo|messe|teacher summit|dienstreise)\b/i,
   vacation: /\b(vacation|holiday|urlaub|ferien|honeymoon|getaway|resort)\b/i,
   weekend_trip: /\b(weekend|city break|kurztrip)\b/i,
   day_trip: /\b(day trip|tagesausflug|excursion|outing|museum|zoo|beach day)\b/i,
@@ -1228,7 +1671,12 @@ const scoreUpcomingEventRelevance = (event, now = Date.now()) => {
   return score;
 };
 
-const shouldSuppressRoutineRecurringEvents = (config) => config?.services?.llm?.suppressRoutineRecurringEvents !== false;
+const shouldSuppressRoutineRecurringEvents = (config) => {
+  if (config?.services?.context?.suppressRoutineRecurringEvents !== undefined) {
+    return config.services.context.suppressRoutineRecurringEvents !== false;
+  }
+  return config?.services?.llm?.suppressRoutineRecurringEvents !== false;
+};
 
 const RECURRING_ALWAYS_KEEP_PATTERNS = [
   HOUSEHOLD_EVENT_PATTERNS.birthday,
@@ -1302,6 +1750,47 @@ const getRelevantBriefEvents = (events, config, limit = 18) => {
     .sort((left, right) => left.startMs - right.startMs)
     .map((entry) => entry.event);
 };
+
+const getEnabledContextSignals = (config) => ({
+  travel: config?.services?.context?.signals?.travel !== false,
+  birthdays: config?.services?.context?.signals?.birthdays !== false,
+  commute: config?.services?.context?.signals?.commute !== false,
+  household: config?.services?.context?.signals?.household !== false,
+  visitors: config?.services?.context?.signals?.visitors !== false,
+  nextEvent: config?.services?.context?.signals?.nextEvent !== false,
+  highlights: config?.services?.context?.signals?.highlights !== false,
+});
+
+const getDailyBriefCalendarScope = (config) => {
+  const contextConfig = config?.services?.context || {};
+  return {
+    mode: ['all_selected', 'include_selected', 'exclude_selected'].includes(contextConfig.briefCalendarMode)
+      ? contextConfig.briefCalendarMode
+      : 'exclude_selected',
+    includedIds: new Set(Array.isArray(contextConfig.briefIncludedCalendarIds) ? contextConfig.briefIncludedCalendarIds.filter(Boolean) : []),
+    excludedIds: new Set(Array.isArray(contextConfig.briefExcludedCalendarIds) ? contextConfig.briefExcludedCalendarIds.filter(Boolean) : []),
+  };
+};
+
+const isEventIncludedInDailyBrief = (event, config) => {
+  const scope = getDailyBriefCalendarScope(config);
+  if (!event?.calendarId) {
+    return true;
+  }
+
+  if (scope.mode === 'include_selected') {
+    return scope.includedIds.has(event.calendarId);
+  }
+
+  if (scope.mode === 'exclude_selected') {
+    return !scope.excludedIds.has(event.calendarId);
+  }
+
+  return true;
+};
+
+const filterEventsForDailyBrief = (events, config) => (Array.isArray(events) ? events : [])
+  .filter((event) => isEventIncludedInDailyBrief(event, config));
 
 const classifyHouseholdEvent = (event) => {
   const combinedText = [
@@ -1535,7 +2024,7 @@ const getNextBirthdayOccurrence = (birthdate) => {
   return occurrence;
 };
 
-const buildBirthdayContext = (household) => {
+const buildBirthdayContext = (household, lookaheadDays = 10) => {
   const members = Array.isArray(household?.members) ? household.members : [];
   const candidate = members
     .filter((member) => member.shareInBrief !== false && member.name && member.birthdate)
@@ -1557,7 +2046,7 @@ const buildBirthdayContext = (household) => {
       };
     })
     .filter(Boolean)
-    .filter((entry) => entry.daysUntil >= 0 && entry.daysUntil <= 14)
+    .filter((entry) => entry.daysUntil >= 0 && entry.daysUntil <= Math.max(1, Number(lookaheadDays) || 10))
     .sort((left, right) => left.daysUntil - right.daysUntil)[0];
 
   if (!candidate) {
@@ -1750,6 +2239,15 @@ const buildCommuteAdvice = ({ memberName, placeLabel, forecast, distanceKm, comm
   return `${memberName} has a scheduled trip to ${placeLabel}.`;
 };
 
+const formatTransportTime = (value) => {
+  const date = getBestTimestamp(value);
+  if (!date) {
+    return '';
+  }
+
+  return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+};
+
 const buildCommuteContext = async (events, household, config, routingConfig, routingSecrets, routingCache) => {
   const members = Array.isArray(household?.members) ? household.members : [];
   if (!hasResolvedLocation(household?.home)) {
@@ -1841,16 +2339,14 @@ const deriveFlightLifecycle = (live) => {
 
   if (actualArrival || status === 'landed') {
     const label = actualArrival
-      ? `Landed ${actualArrival.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
+      ? `Landed ${formatTransportTime(actualArrival)}`
       : 'Landed';
     return { code: 'landed', label };
   }
 
   if (actualDeparture || status === 'active') {
-    const eta = estimatedArrival
-      ? estimatedArrival.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-      : '';
-    return { code: 'departed', label: eta ? `In the air, ETA ${eta}` : 'Departed' };
+    const eta = formatTransportTime(estimatedArrival);
+    return { code: 'departed', label: eta ? `In the air, lands ${eta}` : 'In the air' };
   }
 
   if (status === 'cancelled') {
@@ -1858,22 +2354,25 @@ const deriveFlightLifecycle = (live) => {
   }
 
   if (delayMinutes >= 20) {
-    return { code: 'delayed', label: `${delayMinutes} min delay` };
+    const eta = formatTransportTime(estimatedArrival);
+    return { code: 'delayed', label: eta ? `${delayMinutes} min delay, lands ${eta}` : `${delayMinutes} min delay` };
   }
 
   if (scheduledDeparture) {
     const diffMinutes = Math.round((scheduledDeparture.getTime() - now) / 60000);
+    const departureLabel = formatTransportTime(scheduledDeparture);
+    const arrivalLabel = formatTransportTime(estimatedArrival);
     if (diffMinutes >= 0 && diffMinutes <= 45) {
-      return { code: 'boarding_soon', label: `Boarding soon for ${scheduledDeparture.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` };
+      return { code: 'boarding_soon', label: arrivalLabel ? `Boarding soon, lands ${arrivalLabel}` : `Boarding soon for ${departureLabel}` };
     }
     if (diffMinutes > 45 && diffMinutes <= 180) {
-      return { code: 'departure_today', label: `Departure ${scheduledDeparture.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` };
+      return { code: 'departure_today', label: arrivalLabel ? `Departs ${departureLabel}, lands ${arrivalLabel}` : `Departure ${departureLabel}` };
     }
   }
 
   return {
     code: 'scheduled',
-    label: live.statusText || 'Scheduled',
+    label: formatTransportTime(estimatedArrival) ? `On time, lands ${formatTransportTime(estimatedArrival)}` : (live.statusText || 'Scheduled'),
   };
 };
 
@@ -1884,21 +2383,12 @@ const buildTransportCacheKey = (provider, segment) => {
 };
 
 const buildFlightLiveSummary = (live) => {
-  const pieces = [];
-  if (live.statusText) {
-    pieces.push(live.statusText);
-  }
-  if (live.departure?.gate) {
-    pieces.push(`gate ${live.departure.gate}`);
-  }
-  if (live.departure?.terminal) {
-    pieces.push(`terminal ${live.departure.terminal}`);
-  }
-  if (live.delayMinutes) {
-    pieces.push(`${live.delayMinutes} min delay`);
-  }
-
-  return pieces.join(' • ');
+  return uniqueTexts([
+    live.lifecycle?.label || '',
+    live.departure?.terminal ? `terminal ${live.departure.terminal}` : '',
+    live.departure?.gate ? `gate ${live.departure.gate}` : '',
+    live.arrival?.terminal ? `arrival terminal ${live.arrival.terminal}` : '',
+  ]).join(' • ');
 };
 
 const pickBestAviationstackFlight = (flights, segment) => {
@@ -1997,8 +2487,8 @@ const fetchAviationstackFlight = async (segment, transportSecrets) => {
     delayMinutes: Number(departure.delay || arrival.delay || 0) || 0,
   };
 
-  live.summary = buildFlightLiveSummary(live);
   live.lifecycle = deriveFlightLifecycle(live);
+  live.summary = buildFlightLiveSummary(live);
   return live;
 };
 
@@ -2135,6 +2625,9 @@ const buildTripTimelines = async (events, config, household, transportConfig, tr
 
   const tripTimelines = await Promise.all(clusters.map(async (cluster) => {
     const anchorCalendarIds = new Set(cluster.anchors.map((anchor) => anchor.calendarSummary).filter(Boolean));
+    const anchorEventIds = new Set(cluster.anchors.map((anchor) => anchor.eventId).filter(Boolean));
+    const clusterStartMs = new Date(cluster.start).getTime();
+    const clusterEndMs = new Date(cluster.end).getTime();
     let windowStart = new Date(cluster.start).getTime() - (12 * 3600000);
     let windowEnd = new Date(cluster.end).getTime() + (12 * 3600000);
 
@@ -2144,8 +2637,14 @@ const buildTripTimelines = async (events, config, household, transportConfig, tr
       const overlapsWindow = eventStart <= windowEnd && eventEnd >= windowStart;
       const mentionsDestination = eventMentionsDestination(event, cluster.destination);
       const sameCalendar = anchorCalendarIds.has(event.calendarSummary || '');
+      const isAnchorEvent = anchorEventIds.has(event.id);
+      const isNearTripBoundary = Math.abs(eventStart - clusterStartMs) <= (18 * 3600000)
+        || Math.abs(eventEnd - clusterEndMs) <= (18 * 3600000);
 
-      return mentionsDestination || (overlapsWindow && (sameCalendar || eventHasTravelSignal(event)));
+      return isAnchorEvent
+        || mentionsDestination
+        || eventHasTravelSignal(event)
+        || (overlapsWindow && sameCalendar && isNearTripBoundary && !isLowValueRoutineEvent(event));
     });
 
     if (relatedEvents.length > 0) {
@@ -2158,6 +2657,7 @@ const buildTripTimelines = async (events, config, household, transportConfig, tr
       .filter(Boolean);
     const intent = classifyTripIntent(sourceEvents, windowStart, windowEnd);
     const enrichment = await tryFetchDestinationWeather(cluster.destination, new Date(windowStart), new Date(windowEnd));
+    const travelerLabel = inferTripTravelerLabel(sourceEvents, household);
     const transportSegments = await Promise.all(sourceEvents
       .filter((event) => eventHasTravelSignal(event) || eventMentionsDestination(event, cluster.destination))
       .map((event) => inferTransportSegment(event, cluster, transportConfig, transportSecrets))
@@ -2183,6 +2683,7 @@ const buildTripTimelines = async (events, config, household, transportConfig, tr
       transportLifecycle: transportSegments[0]?.lifecycle || null,
       transportSegments,
       enrichment,
+      travelerLabel,
       sourceEventIds: sourceEvents.map((event) => event.id),
       eventCount: sourceEvents.length,
       calendars: Array.from(new Set(sourceEvents.map((event) => event.calendarSummary).filter(Boolean))),
@@ -2193,12 +2694,14 @@ const buildTripTimelines = async (events, config, household, transportConfig, tr
   return tripTimelines.sort((left, right) => new Date(left.start) - new Date(right.start));
 };
 
+const UPCOMING_TRIP_BRIEF_WINDOW_MS = 72 * 3600000;
+
 const selectActiveTrip = (trips) => {
   const now = Date.now();
   return trips.find((trip) => now >= new Date(trip.start).getTime() && now <= new Date(trip.end).getTime())
     || trips.find((trip) => {
       const start = new Date(trip.start).getTime();
-      return start >= now && (start - now) <= 172800000;
+      return start >= now && (start - now) <= UPCOMING_TRIP_BRIEF_WINDOW_MS;
     })
     || null;
 };
@@ -2306,6 +2809,7 @@ const attachTripPhase = (trip, transportConfig, relation) => {
 
   return {
     ...trip,
+    homeboundSegment: getLatestHomeboundSegment(trip, transportConfig),
     phase: deriveTripPhase(trip, transportConfig, relation),
   };
 };
@@ -2363,6 +2867,45 @@ const buildHighlightEventContext = (events, config) => {
   };
 };
 
+const buildTravelHeadsUpContext = (events, config, household) => {
+  const now = Date.now();
+  const candidate = events
+    .map((event) => {
+      const startMs = new Date(event.start).getTime();
+      const endMs = new Date(event.end).getTime();
+      if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < now || startMs < now) {
+        return null;
+      }
+
+      const anchor = inferTripAnchorFromEvent(event, config, household);
+      if (!anchor || (startMs - now) > UPCOMING_TRIP_BRIEF_WINDOW_MS) {
+        return null;
+      }
+
+      return {
+        event,
+        anchor,
+        startMs,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.startMs - right.startMs)[0];
+
+  if (!candidate) {
+    return null;
+  }
+
+  return {
+    title: candidate.event.title,
+    destination: candidate.anchor.destination,
+    start: candidate.event.start,
+    end: candidate.event.end,
+    isAllDay: candidate.event.isAllDay,
+    sourceEventId: candidate.event.id,
+    travelerLabel: inferTripTravelerLabel([candidate.event], household),
+  };
+};
+
 const buildVisitorContext = async (events, config, household) => {
   const now = Date.now();
   const visitorEvent = events.find((event) => {
@@ -2403,58 +2946,145 @@ const hoursUntil = (value) => Math.round((new Date(value).getTime() - Date.now()
 
 const uniqueTexts = (values) => Array.from(new Set(values.map((value) => value?.toString().trim()).filter(Boolean)));
 
-const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, visitorContext, birthdayContext, commuteContext, householdEventContext, highlightEventContext = null) => {
+const hasMeaningfulBriefCandidate = (candidate) => Boolean(
+  candidate
+  && (
+    (typeof candidate.householdView === 'string' && candidate.householdView.trim())
+    || (Array.isArray(candidate.bullets) && candidate.bullets.length > 0)
+  ),
+);
+
+const llmBriefHasMeaningfulContent = (brief) => Boolean(
+  brief
+  && (
+    (typeof brief.householdView === 'string' && brief.householdView.trim())
+    || (Array.isArray(brief.bullets) && brief.bullets.some((bullet) => bullet?.toString().trim()))
+    || (Array.isArray(brief.items) && brief.items.some(hasMeaningfulBriefCandidate))
+  ),
+);
+
+const buildBriefItems = (candidates, limit = 3) => candidates
+  .filter(hasMeaningfulBriefCandidate)
+  .slice(0, limit)
+  .map((candidate) => ({
+    id: candidate.id,
+    kind: candidate.kind || candidate.id,
+    headline: candidate.headline || 'Daily brief',
+    householdView: candidate.householdView || '',
+    bullets: uniqueTexts(candidate.bullets || []).slice(0, 3),
+    score: candidate.score || 0,
+  }));
+
+const buildBriefItemsFromBrief = (brief) => {
+  if (!brief || !llmBriefHasMeaningfulContent(brief)) {
+    return [];
+  }
+
+  return [{
+    id: 'llm_brief',
+    kind: 'llm',
+    headline: brief.headline || 'Daily brief',
+    householdView: typeof brief.householdView === 'string' ? brief.householdView : '',
+    bullets: Array.isArray(brief.bullets) ? brief.bullets.filter((bullet) => bullet?.toString().trim()).slice(0, 4) : [],
+    score: 100,
+  }];
+};
+
+const buildTripCurrentConditionsLabel = (trip) => {
+  const temp = trip?.enrichment?.currentWeather?.temp;
+  const weatherLabel = trip?.enrichment?.currentWeather?.label;
+  if (temp === null || temp === undefined || !weatherLabel) {
+    return '';
+  }
+
+  return `${trip.destination} now: ${weatherLabel}, ${temp}C.`;
+};
+
+const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, travelHeadsUpContext, visitorContext, birthdayContext, commuteContext, householdEventContext, highlightEventContext = null) => {
   const candidates = [];
 
   if (activeTrip) {
     const destination = activeTrip.enrichment?.destination || activeTrip.destination;
+    const travelerLabel = activeTrip.travelerLabel || '';
     const lifecycleCode = activeTrip.transportLifecycle?.code || '';
     const lifecycleLabel = activeTrip.transportLifecycle?.label || '';
     const intentLabel = activeTrip.intent?.label || 'Trip';
     const phaseCode = activeTrip.phase?.code || '';
     const phaseLabel = activeTrip.phase?.label || '';
     const tripHours = hoursUntil(activeTrip.start);
+    const forecastNarrative = activeTrip.enrichment?.forecast?.narrative || activeTrip.enrichment?.forecast?.label || '';
+    const currentWeatherLabel = buildTripCurrentConditionsLabel(activeTrip);
+    const homeboundSegment = activeTrip.homeboundSegment || null;
+    const homeboundHours = homeboundSegment?.start ? hoursUntil(homeboundSegment.start) : null;
 
     let householdView = `${intentLabel} context is active for ${destination}.`;
     let score = 78;
     const bullets = [];
 
     if (phaseCode === 'returned_home') {
-      householdView = `Back home from ${destination}.`;
+      householdView = travelerLabel ? `${travelerLabel} is back home from ${destination}.` : `Back home from ${destination}.`;
       score = 86;
-      bullets.push(`Back home from ${destination}.`);
+      bullets.push(householdView);
+    } else if (phaseCode === 'trip_active' && homeboundSegment && homeboundHours !== null && homeboundHours >= 0 && homeboundHours <= 36) {
+      const returnDayLabel = homeboundHours <= 18 ? 'later today' : 'tomorrow';
+      householdView = travelerLabel
+        ? `${travelerLabel} returns from ${destination} ${returnDayLabel}.`
+        : `Return from ${destination} is ${returnDayLabel}.`;
+      score = homeboundHours <= 18 ? 96 : 90;
+      bullets.push(homeboundSegment.lifecycle?.label || '');
+      bullets.push(homeboundSegment.summary || '');
     } else if (phaseCode === 'returning_home') {
-      householdView = phaseLabel ? `Returning home from ${destination}. ${phaseLabel}` : `Returning home from ${destination}.`;
+      householdView = travelerLabel
+        ? `${travelerLabel} is returning from ${destination}.${phaseLabel ? ` ${phaseLabel}` : ''}`
+        : (phaseLabel ? `Returning home from ${destination}. ${phaseLabel}` : `Returning home from ${destination}.`);
       score = 92;
-      bullets.push(`Returning home from ${destination}.`);
+      bullets.push(travelerLabel ? `${travelerLabel} is on the way back from ${destination}.` : `Returning home from ${destination}.`);
     } else if (lifecycleCode === 'boarding_soon') {
-      householdView = `${intentLabel} to ${destination} is leaving soon. ${lifecycleLabel}`;
+      householdView = travelerLabel
+        ? `${travelerLabel} flies to ${destination} soon. ${lifecycleLabel}`
+        : `${intentLabel} to ${destination} is leaving soon. ${lifecycleLabel}`;
       score = 100;
-      bullets.push(`${intentLabel} to ${destination} starts soon.`);
+      bullets.push(travelerLabel ? `${travelerLabel} leaves for ${destination} soon.` : `${intentLabel} to ${destination} starts soon.`);
     } else if (lifecycleCode === 'departure_today') {
-      householdView = `${intentLabel} to ${destination} departs later today.`;
+      householdView = travelerLabel
+        ? `${travelerLabel} departs for ${destination} later today.`
+        : `${intentLabel} to ${destination} departs later today.`;
       score = 95;
-      bullets.push(`${intentLabel} to ${destination} departs later today.`);
+      bullets.push(travelerLabel ? `${travelerLabel} departs for ${destination} later today.` : `${intentLabel} to ${destination} departs later today.`);
     } else if (lifecycleCode === 'departed') {
-      householdView = `Currently travelling for ${intentLabel.toLowerCase()} to ${destination}. ${lifecycleLabel}`;
+      householdView = travelerLabel
+        ? `${travelerLabel} is travelling to ${destination}. ${lifecycleLabel}`
+        : `Currently travelling for ${intentLabel.toLowerCase()} to ${destination}. ${lifecycleLabel}`;
       score = 97;
-      bullets.push(`${destination} is active now.`);
+      bullets.push(travelerLabel ? `${travelerLabel} is currently travelling.` : `${destination} is active now.`);
     } else if (lifecycleCode === 'landed') {
-      householdView = `${intentLabel} to ${destination} has landed safely.`;
+      householdView = travelerLabel
+        ? `${travelerLabel} has landed safely in ${destination}.`
+        : `${intentLabel} to ${destination} has landed safely.`;
       score = 90;
-      bullets.push(`${intentLabel} to ${destination} landed safely.`);
+      bullets.push(householdView);
     } else if (lifecycleCode === 'delayed') {
-      householdView = `${intentLabel} to ${destination} is delayed. ${lifecycleLabel}`;
+      householdView = travelerLabel
+        ? `${travelerLabel}'s trip to ${destination} is delayed. ${lifecycleLabel}`
+        : `${intentLabel} to ${destination} is delayed. ${lifecycleLabel}`;
       score = 98;
-      bullets.push(`${intentLabel} to ${destination} is delayed.`);
+      bullets.push(travelerLabel ? `${travelerLabel}'s trip to ${destination} is delayed.` : `${intentLabel} to ${destination} is delayed.`);
     } else if (lifecycleCode === 'cancelled') {
       householdView = `${intentLabel} to ${destination} was cancelled.`;
       score = 99;
       bullets.push(`${intentLabel} to ${destination} was cancelled.`);
-    } else if (phaseCode === 'upcoming_trip' || (tripHours >= 0 && tripHours <= 48)) {
-      householdView = `Upcoming ${intentLabel.toLowerCase()} to ${destination} starts ${formatDateLabel(activeTrip.start)}.`;
+    } else if (phaseCode === 'upcoming_trip' || (tripHours >= 0 && tripHours <= 72)) {
+      householdView = travelerLabel
+        ? `${travelerLabel} leaves for ${destination} ${tripHours <= 24 ? 'soon' : `on ${formatDateLabel(activeTrip.start)}`}.`
+        : `Upcoming ${intentLabel.toLowerCase()} to ${destination} starts ${formatDateLabel(activeTrip.start)}.`;
       score = tripHours <= 24 ? 88 : 80;
-      bullets.push(`${intentLabel} to ${destination} starts soon.`);
+      bullets.push(travelerLabel ? `${travelerLabel} leaves for ${destination} soon.` : `${intentLabel} to ${destination} starts soon.`);
+    } else if (phaseCode === 'trip_active') {
+      householdView = travelerLabel
+        ? `${travelerLabel} is in ${destination}.`
+        : `${intentLabel} in ${destination} is active.`;
+      score = 84;
+      bullets.push(travelerLabel ? `${travelerLabel} is currently in ${destination}.` : `${destination} is active now.`);
     } else {
       bullets.push(`${destination} is active now.`);
     }
@@ -2468,19 +3098,21 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, visit
     if (activeTrip.transportSummary) {
       bullets.push(activeTrip.transportSummary);
     }
-    if (activeTrip.enrichment?.forecast?.label) {
-      bullets.push(`${destination} weather: ${activeTrip.enrichment.forecast.label}.`);
+    const showDestinationLiveConditions = phaseCode === 'trip_active' || phaseCode === 'returning_home';
+    if (forecastNarrative) {
+      bullets.push(forecastNarrative);
     }
-    if (activeTrip.enrichment?.currentTime) {
-      bullets.push(`Local time there is ${activeTrip.enrichment.currentTime}.`);
+    if (showDestinationLiveConditions && currentWeatherLabel) {
+      bullets.push(currentWeatherLabel);
     }
 
     candidates.push({
       id: 'active_trip',
+      kind: 'travel',
       score,
       headline: 'Travel update',
       householdView,
-      bullets: uniqueTexts(bullets),
+      bullets: uniqueTexts(bullets).slice(0, 4),
     });
   } else if (recentTrip) {
     const destination = recentTrip.enrichment?.destination || recentTrip.destination;
@@ -2492,6 +3124,7 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, visit
 
     candidates.push({
       id: 'recent_trip',
+      kind: 'travel',
       score: recentTrip.phase?.code === 'returned_home' ? 74 : 68,
       headline: 'Travel update',
       householdView,
@@ -2499,6 +3132,29 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, visit
         recentTrip.phase?.code === 'returned_home'
           ? `Back home from ${destination}.`
           : `${recentTrip.intent?.label || 'Trip'} to ${destination} finished recently.`,
+      ]),
+    });
+  } else if (travelHeadsUpContext) {
+    const start = new Date(travelHeadsUpContext.start);
+    const hoursUntilStart = hoursUntil(travelHeadsUpContext.start);
+    const destination = travelHeadsUpContext.destination;
+    const travelerLabel = travelHeadsUpContext.travelerLabel || '';
+    const householdView = travelerLabel
+      ? `${travelerLabel} leaves for ${destination} ${hoursUntilStart <= 24 ? 'soon' : `on ${formatDateLabel(travelHeadsUpContext.start)}`}.`
+      : `${travelHeadsUpContext.title} starts ${hoursUntilStart <= 24 ? 'soon' : `on ${formatDateLabel(travelHeadsUpContext.start)}`}.`;
+
+    candidates.push({
+      id: 'travel_heads_up',
+      kind: 'travel',
+      score: hoursUntilStart <= 24 ? 86 : 78,
+      headline: 'Travel update',
+      householdView,
+      bullets: uniqueTexts([
+        travelHeadsUpContext.title ? `${travelHeadsUpContext.title} starts ${formatDateLabel(travelHeadsUpContext.start)}.` : '',
+        destination ? `Destination: ${destination}.` : '',
+        !travelHeadsUpContext.isAllDay
+          ? `Departure around ${start.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}.`
+          : '',
       ]),
     });
   }
@@ -2510,6 +3166,7 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, visit
     const score = Math.max(58, 78 - Math.max(0, diffDays(visitorContext.start, new Date()) * 5));
     candidates.push({
       id: 'visitor',
+      kind: 'visitor',
       score,
       headline: 'Visitor context',
       householdView,
@@ -2526,10 +3183,11 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, visit
       ? `${birthdayContext.memberName} turns ${birthdayContext.turning} today.`
       : (birthdayContext.isTomorrow
         ? `${birthdayContext.memberName} turns ${birthdayContext.turning} tomorrow.`
-        : `${birthdayContext.memberName}'s birthday is ${formatDateLabel(birthdayContext.nextOccurrence)}.`);
-    const score = birthdayContext.isToday ? 96 : (birthdayContext.isTomorrow ? 84 : Math.max(60, 78 - birthdayContext.daysUntil));
+        : `${birthdayContext.memberName} has a birthday in ${birthdayContext.daysUntil} days.`);
+    const score = birthdayContext.isToday ? 96 : (birthdayContext.isTomorrow ? 84 : Math.max(58, 76 - birthdayContext.daysUntil));
     candidates.push({
       id: 'birthday',
+      kind: 'birthday',
       score,
       headline: 'Birthday reminder',
       householdView,
@@ -2539,6 +3197,7 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, visit
           : (birthdayContext.isTomorrow
             ? `${birthdayContext.memberName} turns ${birthdayContext.turning} tomorrow.`
             : `${birthdayContext.memberName} turns ${birthdayContext.turning} on ${formatDateLabel(birthdayContext.nextOccurrence)}.`),
+        birthdayContext.daysUntil >= 3 ? 'Good time to plan a card or present.' : '',
       ]),
     });
   }
@@ -2546,21 +3205,25 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, visit
   if (commuteContext) {
     const commuteHours = hoursUntil(commuteContext.start);
     const weatherRisk = commuteContext.forecast?.weatherCode !== undefined && weatherNeedsIndoorPlan(commuteContext.forecast.weatherCode);
-    const score = Math.max(55, 82 - Math.max(0, commuteHours)) + (weatherRisk ? 8 : 0);
-    candidates.push({
-      id: 'commute',
-      score,
-      headline: 'Commute context',
-      householdView: commuteContext.advice || `${commuteContext.memberName} has a commute planned.`,
-      bullets: uniqueTexts([
-        `${commuteContext.memberName}: ${commuteContext.eventTitle} on ${formatDateLabel(commuteContext.start)}.`,
-        commuteContext.route?.durationMinutes
-          ? `${commuteContext.placeLabel} is about ${commuteContext.route.durationMinutes} min from home.`
-          : (commuteContext.distanceKm !== null ? `${commuteContext.placeLabel} is about ${commuteContext.distanceKm} km from home.` : ''),
-        commuteContext.forecast?.label ? `${commuteContext.placeLabel} weather: ${commuteContext.forecast.label}.` : '',
-        commuteContext.advice || '',
-      ]),
-    });
+    const hasExtraValue = Boolean(weatherRisk || commuteContext.route?.durationMinutes || (commuteContext.distanceKm !== null && commuteContext.distanceKm >= 25));
+    if (hasExtraValue) {
+      const score = Math.max(55, 82 - Math.max(0, commuteHours)) + (weatherRisk ? 8 : 0);
+      candidates.push({
+        id: 'commute',
+        kind: 'route',
+        score,
+        headline: 'Commute context',
+        householdView: commuteContext.advice || `${commuteContext.memberName} has a commute planned.`,
+        bullets: uniqueTexts([
+          `${commuteContext.memberName}: ${commuteContext.eventTitle} on ${formatDateLabel(commuteContext.start)}.`,
+          commuteContext.route?.durationMinutes
+            ? `${commuteContext.placeLabel} is about ${commuteContext.route.durationMinutes} min from home.`
+            : (commuteContext.distanceKm !== null ? `${commuteContext.placeLabel} is about ${commuteContext.distanceKm} km from home.` : ''),
+          commuteContext.forecast?.label ? `${commuteContext.placeLabel} weather: ${commuteContext.forecast.label}.` : '',
+          commuteContext.advice || '',
+        ]),
+      });
+    }
   }
 
   if (householdEventContext) {
@@ -2601,6 +3264,7 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, visit
 
     candidates.push({
       id: 'household_event',
+      kind: householdEventContext.type || 'household',
       score,
       headline: 'Household brief',
       householdView,
@@ -2627,21 +3291,18 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, visit
         ? `tomorrow${highlightEventContext.isAllDay ? '' : ` at ${start.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`}`
         : `on ${formatDateLabel(highlightEventContext.start)}`);
     const prepLike = /\b(setup|prep|preparation|conference|meeting|presentation|overview|tickets?|concert|show|festival|dinner|lunch)\b/i;
-    const householdView = prepLike.test(highlightEventContext.title)
-      ? `${highlightEventContext.title} is coming up ${whenLabel}.`
-      : `Keep ${highlightEventContext.title} in mind ${whenLabel}.`;
-
-    candidates.push({
-      id: 'highlight_event',
-      score: Math.max(58, highlightEventContext.score + 18),
-      headline: 'Daily brief',
-      householdView,
-      bullets: uniqueTexts([
-        prepLike.test(highlightEventContext.title)
-          ? `Think about ${highlightEventContext.title} ${whenLabel}.`
-          : `${highlightEventContext.title} ${whenLabel}.`,
-      ]),
-    });
+    if (prepLike.test(highlightEventContext.title)) {
+      candidates.push({
+        id: 'highlight_event',
+        kind: 'highlight',
+        score: Math.max(58, highlightEventContext.score + 18),
+        headline: 'Daily brief',
+        householdView: `${highlightEventContext.title} is coming up ${whenLabel}.`,
+        bullets: uniqueTexts([
+          `Think about ${highlightEventContext.title} ${whenLabel}.`,
+        ]),
+      });
+    }
   }
 
   const skipNextEventBullet = nextEvent && (
@@ -2655,18 +3316,24 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, visit
     const startLabel = nextEvent.isAllDay
       ? start.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
       : start.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-    const score = Math.max(30, 54 - Math.max(0, hoursUntil(nextEvent.start)));
     const householdView = buildNextEventHouseholdView(nextEvent);
-    candidates.push({
-      id: 'next_event',
-      score,
-      headline: 'Next up',
-      householdView,
-      bullets: [`Next: ${nextEvent.title} on ${startLabel}.`],
-    });
+    const nextEventHours = hoursUntil(nextEvent.start);
+    if (householdView || nextEventHours <= 12) {
+      const score = Math.max(30, 54 - Math.max(0, nextEventHours));
+      candidates.push({
+        id: 'next_event',
+        kind: 'next_event',
+        score,
+        headline: 'Next up',
+        householdView,
+        bullets: [`Next: ${nextEvent.title} on ${startLabel}.`],
+      });
+    }
   }
 
-  return candidates.sort((left, right) => right.score - left.score);
+  return candidates
+    .sort((left, right) => right.score - left.score)
+    .filter(hasMeaningfulBriefCandidate);
 };
 
 const buildHouseholdMessage = (activeTrip, nextEvent, recentTrip, visitorContext, birthdayContext, commuteContext, householdEventContext) => (
@@ -2675,6 +3342,7 @@ const buildHouseholdMessage = (activeTrip, nextEvent, recentTrip, visitorContext
     activeTrip,
     nextEvent,
     recentTrip,
+    null,
     visitorContext,
     birthdayContext,
     commuteContext,
@@ -2719,27 +3387,61 @@ const buildNextEventHouseholdView = (event) => {
   return dayOffset <= 1 ? `${title} ${whenLabel}${timeLabel}.` : '';
 };
 
-const buildDailyBrief = (events, activeTrip, nextEvent, recentTrip, visitorContext, birthdayContext, commuteContext, householdEventContext, config) => {
+const buildDailyBrief = (events, activeTrip, nextEvent, recentTrip, travelHeadsUpContext, visitorContext, birthdayContext, commuteContext, householdEventContext, config) => {
   const highlightEventContext = buildHighlightEventContext(events, config);
   const candidates = buildContextCandidates(
     events,
     activeTrip,
     nextEvent,
     recentTrip,
+    travelHeadsUpContext,
     visitorContext,
     birthdayContext,
     commuteContext,
     householdEventContext,
     highlightEventContext,
   );
-  const primary = candidates[0] || null;
-  const bullets = uniqueTexts(candidates.flatMap((candidate) => candidate.bullets)).slice(0, 3);
+  const items = buildBriefItems(candidates, 3);
+  const primary = items[0] || null;
+  const bullets = uniqueTexts(primary?.bullets || []).slice(0, 3);
 
   return {
     headline: primary?.headline || 'Daily brief',
     bullets: bullets.length > 0 ? bullets : (events.length > 1 ? [`${events.length} upcoming calendar items are on the mirror.`] : []),
     householdView: primary?.householdView || '',
+    items,
   };
+};
+
+const selectContextBrief = (deterministicBrief, llm) => {
+  if (llm?.status !== 'ready' || !llmBriefHasMeaningfulContent(llm?.brief)) {
+    return {
+      ...deterministicBrief,
+      source: 'deterministic',
+    };
+  }
+
+  return {
+    headline: llm.brief.headline || deterministicBrief.headline,
+    bullets: Array.isArray(llm.brief.bullets) ? llm.brief.bullets : deterministicBrief.bullets,
+    householdView: typeof llm.brief.householdView === 'string' ? llm.brief.householdView : deterministicBrief.householdView,
+    items: buildBriefItemsFromBrief(llm.brief),
+    source: 'llm',
+  };
+};
+
+const formatLlmErrorReason = (error) => {
+  const message = error?.message || 'unknown_llm_error';
+  const responseData = error?.response?.data;
+  if (!responseData) {
+    return message;
+  }
+
+  try {
+    return `${message} | ${JSON.stringify(responseData).slice(0, 500)}`;
+  } catch (formatError) {
+    return message;
+  }
 };
 
 const CONTEXT_HEADLINE_TRANSLATIONS = {
@@ -2788,6 +3490,16 @@ const localizeContextPayload = (payload, locale) => {
     nextPayload.brief.householdView = translateContextText(nextPayload.brief.householdView, locale);
     nextPayload.brief.bullets = Array.isArray(nextPayload.brief.bullets)
       ? nextPayload.brief.bullets.map((bullet) => translateContextText(bullet, locale))
+      : [];
+    nextPayload.brief.items = Array.isArray(nextPayload.brief.items)
+      ? nextPayload.brief.items.map((item) => ({
+        ...item,
+        headline: translateContextText(item.headline, locale),
+        householdView: translateContextText(item.householdView, locale),
+        bullets: Array.isArray(item.bullets)
+          ? item.bullets.map((bullet) => translateContextText(bullet, locale))
+          : [],
+      }))
       : [];
   }
   return nextPayload;
@@ -3079,7 +3791,6 @@ const buildInsightFactsFromContext = (event, activeTrip, recentTrip, commuteCont
         relatedTrip.transportLifecycle?.label || '',
         relatedTrip.transportSummary || '',
         relatedTrip.enrichment?.forecast?.label ? `${destination} weather: ${relatedTrip.enrichment.forecast.label}.` : '',
-        relatedTrip.enrichment?.currentTime ? `Local time there is ${relatedTrip.enrichment.currentTime}.` : '',
       ]),
     };
   }
@@ -3478,28 +4189,54 @@ const GOOGLE_SELECTOR_RESPONSE_SCHEMA = {
   required: ['items'],
 };
 
-const callGoogleGenerativeAi = async ({ apiKey, model, prompt, responseSchema = GOOGLE_BRIEF_RESPONSE_SCHEMA }) => {
-  const response = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-    {
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: `${prompt}\n\nReturn valid JSON only.` }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: 'application/json',
-        responseSchema,
+const buildGoogleGenerateContentPayload = (prompt, responseSchema) => {
+  const generationConfig = {
+    temperature: 0.2,
+  };
+
+  if (responseSchema) {
+    generationConfig.responseMimeType = 'application/json';
+    generationConfig.responseSchema = responseSchema;
+  }
+
+  return {
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: `${prompt}\n\nReturn valid JSON only.` }],
       },
-    },
-    {
-      params: { key: apiKey },
-      headers: { 'content-type': 'application/json' },
-      timeout: 20000,
-    },
-  );
+    ],
+    generationConfig,
+  };
+};
+
+const callGoogleGenerativeAi = async ({ apiKey, model, prompt, responseSchema = GOOGLE_BRIEF_RESPONSE_SCHEMA }) => {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const requestConfig = {
+    params: { key: apiKey },
+    headers: { 'content-type': 'application/json' },
+    timeout: 20000,
+  };
+
+  let response;
+  try {
+    response = await axios.post(
+      url,
+      buildGoogleGenerateContentPayload(prompt, responseSchema),
+      requestConfig,
+    );
+  } catch (error) {
+    const status = error?.response?.status;
+    if (status !== 400 || !responseSchema) {
+      throw error;
+    }
+
+    response = await axios.post(
+      url,
+      buildGoogleGenerateContentPayload(prompt, null),
+      requestConfig,
+    );
+  }
 
   return {
     text: extractTextContent(response.data?.candidates?.[0]?.content?.parts),
@@ -3787,11 +4524,12 @@ const generateLlmBrief = async ({
       },
     };
   } catch (error) {
+    const reason = formatLlmErrorReason(error);
     return {
       updatedAt: new Date().toISOString(),
       provider,
       status: 'failed',
-      reason: error.message,
+      reason,
       brief: null,
       debug: {
         provider,
@@ -3800,7 +4538,7 @@ const generateLlmBrief = async ({
         suppressRoutineRecurringEvents: shouldSuppressRoutineRecurringEvents(config),
         enabled: true,
         status: 'failed',
-        reason: error.message,
+        reason,
         eventSelection: selectionAnalysis,
         inputEvents: selectorInputEvents,
         prompt: composerPrompt || selectorPrompt,
@@ -3821,24 +4559,40 @@ const generateLlmBrief = async ({
 
 const buildContext = async (calendarCache, config, secrets, household, existingContext = null, forceLlm = false) => {
   const events = Array.isArray(calendarCache?.events) ? calendarCache.events : [];
+  const briefEvents = filterEventsForDailyBrief(events, config);
+  const enabledSignals = getEnabledContextSignals(config);
   const transportConfig = config.services.transport || {};
   const routingConfig = config.services.routing || {};
   const transportCache = await readTransportCache();
   const routingCache = await readRoutingCache();
-  const tripCandidates = await buildTripTimelines(events, config, household, transportConfig, secrets.transport || {}, transportCache);
+  const tripCandidates = enabledSignals.travel
+    ? await buildTripTimelines(briefEvents, config, household, transportConfig, secrets.transport || {}, transportCache)
+    : [];
   await writeTransportCache(transportCache);
   const activeTrip = attachTripPhase(selectActiveTrip(tripCandidates), transportConfig, 'active');
   const recentTrip = attachTripPhase(selectRecentTrip(tripCandidates), transportConfig, 'recent');
-  const nextEvent = getNextRelevantEvent(events, config);
-  const visitorContext = await buildVisitorContext(events, config, household);
-  const birthdayContext = buildBirthdayContext(household);
-  const commuteContext = await buildCommuteContext(events, household, config, routingConfig, secrets.routing || {}, routingCache);
-  const householdEventContext = await buildHouseholdEventContext(events, config, household, routingConfig, secrets.routing || {}, routingCache);
-  const highlightEventContext = buildHighlightEventContext(events, config);
+  const travelHeadsUpContext = enabledSignals.travel && !activeTrip && !recentTrip
+    ? buildTravelHeadsUpContext(briefEvents, config, household)
+    : null;
+  const nextEvent = enabledSignals.nextEvent ? getNextRelevantEvent(briefEvents, config) : null;
+  const visitorContext = enabledSignals.visitors ? await buildVisitorContext(briefEvents, config, household) : null;
+  const birthdayContext = enabledSignals.birthdays
+    ? buildBirthdayContext(household, Number(config.services.context?.birthdayLookaheadDays) || 10)
+    : null;
+  const commuteContext = enabledSignals.commute
+    ? await buildCommuteContext(briefEvents, household, config, routingConfig, secrets.routing || {}, routingCache)
+    : null;
+  const householdEventContext = enabledSignals.household
+    ? await buildHouseholdEventContext(briefEvents, config, household, routingConfig, secrets.routing || {}, routingCache)
+    : null;
+  const highlightEventContext = enabledSignals.highlights ? buildHighlightEventContext(briefEvents, config) : null;
   await writeRoutingCache(routingCache);
   const refreshHours = Number(config.services.context.refreshHours) || 3;
   const llm = await generateLlmBrief({
-    calendarCache,
+    calendarCache: {
+      ...calendarCache,
+      events: briefEvents,
+    },
     config,
     secrets,
     activeTrip,
@@ -3850,10 +4604,11 @@ const buildContext = async (calendarCache, config, secrets, household, existingC
     force: forceLlm,
   });
   const deterministicBrief = buildDailyBrief(
-    events,
+    briefEvents,
     activeTrip,
     nextEvent,
     recentTrip,
+    travelHeadsUpContext,
     visitorContext,
     birthdayContext,
     commuteContext,
@@ -3861,27 +4616,18 @@ const buildContext = async (calendarCache, config, secrets, household, existingC
     config,
   );
   const deterministicCandidates = buildContextCandidates(
-    events,
+    briefEvents,
     activeTrip,
     nextEvent,
     recentTrip,
+    travelHeadsUpContext,
     visitorContext,
     birthdayContext,
     commuteContext,
     householdEventContext,
     highlightEventContext,
   );
-  const brief = llm?.status === 'ready' && llm?.brief
-    ? {
-      headline: llm.brief.headline || deterministicBrief.headline,
-      bullets: Array.isArray(llm.brief.bullets) ? llm.brief.bullets : deterministicBrief.bullets,
-      householdView: typeof llm.brief.householdView === 'string' ? llm.brief.householdView : deterministicBrief.householdView,
-      source: 'llm',
-    }
-    : {
-      ...deterministicBrief,
-      source: 'deterministic',
-    };
+  const brief = selectContextBrief(deterministicBrief, llm);
 
   const contextPayload = {
     updatedAt: new Date().toISOString(),
@@ -3914,6 +4660,10 @@ const buildContext = async (calendarCache, config, secrets, household, existingC
         syncedAt: calendarCache?.syncedAt || null,
         selectedCalendarIds: calendarCache?.selectedCalendarIds || [],
         totalEvents: events.length,
+        dailyBriefEligibleEvents: briefEvents.length,
+        dailyBriefCalendarMode: config.services.context?.briefCalendarMode || 'exclude_selected',
+        dailyBriefIncludedCalendarIds: config.services.context?.briefIncludedCalendarIds || [],
+        dailyBriefExcludedCalendarIds: config.services.context?.briefExcludedCalendarIds || [],
         events: events.map((event) => ({
           id: event.id,
           title: event.title,
@@ -3928,13 +4678,14 @@ const buildContext = async (calendarCache, config, secrets, household, existingC
       deterministic: {
         activeTrip,
         recentTrip,
+        travelHeadsUpContext,
         nextEvent,
         visitorContext,
         birthdayContext,
         commuteContext,
         householdEventContext,
         highlightEventContext,
-        eventSelection: events.map((event) => {
+        eventSelection: briefEvents.map((event) => {
           const decision = explainBriefEventSelection(event, config);
           return {
             id: event.id,
@@ -3967,6 +4718,49 @@ const buildContext = async (calendarCache, config, secrets, household, existingC
   return contextPayload;
 };
 
+const buildCalendarCacheFingerprint = (calendarCache = {}) => crypto
+  .createHash('sha1')
+  .update(JSON.stringify({
+    selectedCalendarIds: Array.isArray(calendarCache.selectedCalendarIds)
+      ? [...calendarCache.selectedCalendarIds].sort()
+      : [],
+    events: Array.isArray(calendarCache.events)
+      ? calendarCache.events.map((event) => ({
+        id: event.id || '',
+        title: event.title || '',
+        start: event.start || '',
+        end: event.end || '',
+        isAllDay: Boolean(event.isAllDay),
+        isRecurring: Boolean(event.isRecurring),
+        location: event.location || '',
+        calendarId: event.calendarId || '',
+        calendarSummary: event.calendarSummary || '',
+      }))
+      : [],
+  }))
+  .digest('hex');
+
+const ensureFreshContextCache = async () => {
+  const [context, calendarCache, config] = await Promise.all([
+    loadContextCache(),
+    loadCalendarCache(),
+    readConfig(),
+  ]);
+
+  const calendarSyncedAt = calendarCache?.syncedAt ? new Date(calendarCache.syncedAt).getTime() : 0;
+  const contextUpdatedAt = context?.updatedAt ? new Date(context.updatedAt).getTime() : 0;
+  const shouldRebuild = !context?.updatedAt || (calendarSyncedAt > contextUpdatedAt);
+
+  if (!shouldRebuild) {
+    return { context, config };
+  }
+
+  const [secrets, household] = await Promise.all([readSecrets(), readHousehold()]);
+  const rebuiltContext = await buildContext(calendarCache, config, secrets, household, context, true);
+  await fs.writeJson(CONTEXT_CACHE_PATH, rebuiltContext, { spaces: 2 });
+  return { context: rebuiltContext, config };
+};
+
 const syncGoogleCalendarData = async ({ forceContext = false } = {}) => {
   const [clientInfo, config, secrets, household] = await Promise.all([withGoogleClient(), readConfig(), readSecrets(), readHousehold()]);
   if (!clientInfo) {
@@ -3974,6 +4768,13 @@ const syncGoogleCalendarData = async ({ forceContext = false } = {}) => {
   }
 
   const { client, account } = clientInfo;
+  const previousCalendarCache = await readJsonIfExists(CALENDAR_CACHE_PATH, {
+    syncedAt: null,
+    connectedEmail: '',
+    calendars: [],
+    selectedCalendarIds: [],
+    events: [],
+  });
   const calendarList = await googleRequest(client, 'https://www.googleapis.com/calendar/v3/users/me/calendarList');
   const calendars = Array.isArray(calendarList.items) ? calendarList.items.map(summarizeCalendar) : [];
 
@@ -4009,16 +4810,18 @@ const syncGoogleCalendarData = async ({ forceContext = false } = {}) => {
     events: eventBuckets.flat().sort((left, right) => new Date(left.start) - new Date(right.start)),
   };
 
+  const calendarChanged = buildCalendarCacheFingerprint(previousCalendarCache) !== buildCalendarCacheFingerprint(calendarCache);
   await fs.writeJson(CALENDAR_CACHE_PATH, calendarCache, { spaces: 2 });
 
   const existingContext = await readJsonIfExists(CONTEXT_CACHE_PATH, null);
   const refreshHours = Number(config.services.context.refreshHours) || 3;
   const shouldRefreshContext = forceContext
+    || calendarChanged
     || !existingContext?.updatedAt
     || (Date.now() - new Date(existingContext.updatedAt).getTime()) >= (refreshHours * 3600000);
 
   if (shouldRefreshContext) {
-    const context = await buildContext(calendarCache, config, secrets, household, existingContext, forceContext);
+    const context = await buildContext(calendarCache, config, secrets, household, existingContext, forceContext || calendarChanged);
     await fs.writeJson(CONTEXT_CACHE_PATH, context, { spaces: 2 });
   }
 
@@ -4099,13 +4902,16 @@ const startPowerManager = () => {
 };
 
 const startCalendarSyncLoop = () => {
-  setInterval(async () => {
+  const runSync = async () => {
     try {
       await syncGoogleCalendarData();
     } catch (error) {
       console.error('Calendar sync failed:', error.message);
     }
-  }, 15 * 60 * 1000);
+  };
+
+  runSync();
+  setInterval(runSync, 15 * 60 * 1000);
 };
 
 app.get('/api/config', async (req, res) => {
@@ -4337,8 +5143,9 @@ app.get('/api/display/calendar/events', async (req, res) => {
   try {
     const cache = await loadCalendarCache();
     const config = await readConfig();
-    const calendarOverrides = getAllModules(config)
-      .find((module) => module.type === 'calendar')?.config?.calendarColors || {};
+    const calendarOverrides = config.moduleSettings?.calendar?.calendarColors
+      || getAllModules(config).find((module) => module.type === 'calendar')?.config?.calendarColors
+      || {};
     res.json({
       syncedAt: cache.syncedAt,
       events: cache.events.map((event) => ({
@@ -4353,7 +5160,7 @@ app.get('/api/display/calendar/events', async (req, res) => {
 
 app.get('/api/display/context', async (req, res) => {
   try {
-    const [context, config] = await Promise.all([loadContextCache(), readConfig()]);
+    const { context, config } = await ensureFreshContextCache();
     const locale = req.query.locale?.toString() || config.system?.displayLocale || 'en';
     res.json(localizeContextPayload(context, locale));
   } catch (error) {
@@ -4372,16 +5179,7 @@ app.get('/api/debug/daily-brief', async (req, res) => {
 
 app.post('/api/debug/daily-brief/rebuild', async (req, res) => {
   try {
-    const [config, secrets, calendarCache, household, existingContext] = await Promise.all([
-      readConfig(),
-      readSecrets(),
-      loadCalendarCache(),
-      readHousehold(),
-      readJsonIfExists(CONTEXT_CACHE_PATH, null),
-    ]);
-
-    const context = await buildContext(calendarCache, config, secrets, household, existingContext, true);
-    await fs.writeJson(CONTEXT_CACHE_PATH, context, { spaces: 2 });
+    await syncGoogleCalendarData({ forceContext: true });
 
     const debug = await readDailyBriefDebug();
     res.json({ success: true, debug });
@@ -4424,23 +5222,33 @@ app.post('/api/display/status', async (req, res) => {
 app.get('/api/ha/entities', async (req, res) => {
   try {
     const config = await readConfig();
-    const ha = getAllModules(config).find((module) => module.type === 'home_assistant')?.config;
+    const ha = normalizeHomeAssistantModuleConfig(
+      config.moduleSettings?.home_assistant
+        || getAllModules(config).find((module) => module.type === 'home_assistant')?.config,
+    );
 
     if (!ha?.url || !ha?.token) {
       return res.status(400).json({ error: 'HA URL and token must be saved first.' });
     }
 
-    const response = await axios.get(`${ha.url}/api/states`, {
-      headers: { Authorization: `Bearer ${ha.token}` },
-    });
+    const entities = await fetchHomeAssistantEntities(ha);
+    return res.json({ entities });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to fetch entities', details: error.message });
+  }
+});
 
-    const entities = response.data.map((entity) => ({
-      id: entity.entity_id,
-      name: entity.attributes.friendly_name || entity.entity_id,
-      state: entity.state,
-    }));
+app.post('/api/ha/entities/discover', async (req, res) => {
+  try {
+    const url = typeof req.body?.url === 'string' ? req.body.url : '';
+    const token = typeof req.body?.token === 'string' ? req.body.token : '';
 
-    return res.json(entities);
+    if (!url.trim() || !token.trim()) {
+      return res.status(400).json({ error: 'Home Assistant URL and token are required.' });
+    }
+
+    const entities = await fetchHomeAssistantEntities({ url, token });
+    return res.json({ entities });
   } catch (error) {
     return res.status(500).json({ error: 'Failed to fetch entities', details: error.message });
   }
@@ -4465,12 +5273,19 @@ if (require.main === module) {
 module.exports = {
   app,
   buildBirthdayContext,
+  buildCalendarCacheFingerprint,
   buildContextCandidates,
   buildDailyBrief,
   buildEnrichedBriefInsights,
   estimateRouteFallback,
+  filterEventsForDailyBrief,
   filterLlmBriefAgainstInsights,
   findMatchingSavedPlace,
   inferTripAnchorFromEvent,
+  llmBriefHasMeaningfulContent,
+  selectActiveTrip,
+  selectContextBrief,
+  buildBriefItemsFromBrief,
+  normalizeConfig,
   validateLlmSelection,
 };

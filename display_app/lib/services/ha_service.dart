@@ -10,7 +10,11 @@ class HAEntity {
   final String friendlyName;
   final Map attributes;
 
-  HAEntity({required this.entityId, required this.state, required this.friendlyName, required this.attributes});
+  HAEntity(
+      {required this.entityId,
+      required this.state,
+      required this.friendlyName,
+      required this.attributes});
 
   factory HAEntity.fromJson(Map json) {
     return HAEntity(
@@ -20,6 +24,80 @@ class HAEntity {
       attributes: json['attributes'] ?? {},
     );
   }
+}
+
+enum HATileDisplayType { small, medium, large }
+
+class HAConfiguredEntity {
+  final String entityId;
+  final String icon;
+  final HATileDisplayType displayType;
+
+  const HAConfiguredEntity({
+    required this.entityId,
+    required this.icon,
+    required this.displayType,
+  });
+}
+
+String _readConfiguredEntityId(dynamic entry) {
+  if (entry is String) {
+    return entry.trim();
+  }
+  if (entry is Map) {
+    final dynamic rawEntityId = entry['entityId'] ?? entry['id'];
+    if (rawEntityId is String) {
+      return rawEntityId.trim();
+    }
+  }
+  return '';
+}
+
+HATileDisplayType _parseTileDisplayType(dynamic value) {
+  final normalized = value?.toString().trim().toLowerCase() ?? '';
+  switch (normalized) {
+    case 'small':
+      return HATileDisplayType.small;
+    case 'large':
+      return HATileDisplayType.large;
+    case 'medium':
+    default:
+      return HATileDisplayType.medium;
+  }
+}
+
+List<HAConfiguredEntity> parseConfiguredHAEntities(Map? config) {
+  final rawEntityCards = config?['entityCards'];
+  final rawEntities = config?['entities'];
+  final source = rawEntityCards is List && rawEntityCards.isNotEmpty
+      ? rawEntityCards
+      : (rawEntities is List ? rawEntities : const []);
+
+  return source
+      .map((entry) {
+        final entityId = _readConfiguredEntityId(entry);
+        if (entityId.isEmpty) {
+          return null;
+        }
+
+        if (entry is Map) {
+          return HAConfiguredEntity(
+            entityId: entityId,
+            icon: (entry['icon']?.toString().trim().isNotEmpty ?? false)
+                ? entry['icon'].toString().trim()
+                : 'auto',
+            displayType: _parseTileDisplayType(entry['displayType']),
+          );
+        }
+
+        return HAConfiguredEntity(
+          entityId: entityId,
+          icon: 'auto',
+          displayType: HATileDisplayType.medium,
+        );
+      })
+      .whereType<HAConfiguredEntity>()
+      .toList();
 }
 
 class HANotifier extends StateNotifier<Map<String, HAEntity>> {
@@ -47,11 +125,17 @@ class HANotifier extends StateNotifier<Map<String, HAEntity>> {
     }
     final haConfig = haModule?['config'] as Map?;
 
+    final enabled = haConfig?['enabled'] != false;
     final url = haConfig?['url'];
     final token = haConfig?['token'];
-    final entities = haConfig?['entities'] as List? ?? [];
+    final entities = parseConfiguredHAEntities(haConfig)
+        .map((entity) => entity.entityId)
+        .toList();
 
-    if (url == null || token == null || url.isEmpty || token.isEmpty) return;
+    if (!enabled || url == null || token == null || url.isEmpty || token.isEmpty) {
+      state = {};
+      return;
+    }
 
     final wsUrl = url.replaceFirst('http', 'ws') + '/api/websocket';
     _connect(wsUrl, token, entities);
@@ -63,7 +147,7 @@ class HANotifier extends StateNotifier<Map<String, HAEntity>> {
 
     _channel!.stream.listen((message) {
       final data = jsonDecode(message);
-      
+
       if (data['type'] == 'auth_required') {
         _channel!.sink.add(jsonEncode({
           'type': 'auth',
@@ -72,13 +156,18 @@ class HANotifier extends StateNotifier<Map<String, HAEntity>> {
       } else if (data['type'] == 'auth_ok') {
         _authenticated = true;
         _subscribeToEntities(entities);
-      } else if (data['type'] == 'event' && data['event']['event_type'] == 'state_changed') {
+      } else if (data['type'] == 'event' &&
+          data['event']['event_type'] == 'state_changed') {
         final newState = data['event']['data']['new_state'];
         if (newState != null) {
           final entity = HAEntity.fromJson(newState);
-          state = {...state, entity.entityId: entity};
+          if (entities.contains(entity.entityId)) {
+            state = {...state, entity.entityId: entity};
+          }
         }
-      } else if (data['type'] == 'result' && data['success'] == true && data['result'] is List) {
+      } else if (data['type'] == 'result' &&
+          data['success'] == true &&
+          data['result'] is List) {
         // Initial state fetch
         final Map<String, HAEntity> initialStates = {};
         for (var s in data['result']) {
@@ -115,6 +204,7 @@ class HANotifier extends StateNotifier<Map<String, HAEntity>> {
   }
 }
 
-final haProvider = StateNotifierProvider<HANotifier, Map<String, HAEntity>>((ref) {
+final haProvider =
+    StateNotifierProvider<HANotifier, Map<String, HAEntity>>((ref) {
   return HANotifier(ref);
 });

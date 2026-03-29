@@ -1,4 +1,43 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+const ROTATOR_ANIMATIONS = {
+  swipe: 'translate-x-0 opacity-100',
+  blend: 'opacity-100',
+  lift: 'translate-y-0 scale-100 opacity-100',
+  none: '',
+};
+
+const resolveRotatorPreviewState = (module, now) => {
+  const config = module?.config || {};
+  const modules = Array.isArray(config.modules) && config.modules.length
+    ? config.modules.slice(0, 3)
+    : [{ id: 'preview-clock', type: 'clock', align: 'stretch', config: {} }];
+  const rotationSeconds = clamp(parseInt(config.rotationSeconds || '10', 10), 3, 120);
+
+  if (modules.length <= 1) {
+    return {
+      activeIndex: 0,
+      progress: 1,
+      modules,
+      activeModule: modules[0],
+      animation: config.animation || 'swipe',
+    };
+  }
+
+  const intervalMs = rotationSeconds * 1000;
+  const elapsedMs = now % (intervalMs * modules.length);
+  const activeIndex = Math.floor(elapsedMs / intervalMs) % modules.length;
+
+  return {
+    activeIndex,
+    progress: (elapsedMs % intervalMs) / intervalMs,
+    modules,
+    activeModule: modules[activeIndex],
+    animation: config.animation || 'swipe',
+  };
+};
 
 const MirrorPreview = ({
   config,
@@ -15,6 +54,7 @@ const MirrorPreview = ({
   const { theme } = config;
   const containerRef = useRef(null);
   const dragStateRef = useRef(null);
+  const [previewNow, setPreviewNow] = useState(() => Date.now());
   const gridLayout = config.gridLayout || {
     columns: 4,
     rows: 8,
@@ -43,6 +83,14 @@ const MirrorPreview = ({
       }
     }
   }
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setPreviewNow(Date.now());
+    }, 120);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   useEffect(() => {
     const handlePointerMove = (event) => {
@@ -197,7 +245,7 @@ const MirrorPreview = ({
             }}
             title="Click to select this module"
           >
-            <ModulePreview type={mod.type} theme={theme} module={mod} />
+            <ModulePreview type={mod.type} theme={theme} module={mod} now={previewNow} />
             {selectedModuleId === mod.id && (
               <button
                 type="button"
@@ -251,10 +299,62 @@ const buildClockPreviewMeta = () => ({
   week: 'KW 4',
 });
 
-const ModulePreview = ({ type, theme, module }) => {
+const RotatorIndicator = ({ pageCount, activeIndex, progress }) => (
+  <div className="mt-3 flex items-center justify-center gap-2">
+    {Array.from({ length: pageCount }).map((_, index) => (
+      <div
+        key={`rotator-dot-${index}`}
+        className={`relative h-2.5 w-2.5 overflow-hidden rounded-full border ${
+          index === activeIndex ? 'border-white/60 bg-white/10' : 'border-white/20 bg-white/5'
+        }`}
+      >
+        <div
+          className="absolute inset-y-0 left-0 rounded-full bg-white/80 transition-[width] duration-100"
+          style={{ width: `${index === activeIndex ? Math.max(10, progress * 100) : 0}%` }}
+        />
+      </div>
+    ))}
+  </div>
+);
+
+const ModulePreview = ({ type, theme, module, now = Date.now() }) => {
   const density = getDensity(module);
 
   switch (type) {
+    case 'module_rotator':
+    {
+      const rotatorState = resolveRotatorPreviewState(module, now);
+      const activeModule = {
+        ...module,
+        ...rotatorState.activeModule,
+        type: rotatorState.activeModule?.type || 'clock',
+        align: rotatorState.activeModule?.align || 'stretch',
+        config: rotatorState.activeModule?.config || {},
+        w: module.w,
+        h: module.h,
+      };
+
+      return (
+        <div className="flex h-full flex-col">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="text-[10px] font-bold uppercase tracking-[0.24em]" style={{ color: theme.accentColor }}>Auto Rotate</div>
+            <div className="text-[10px] uppercase tracking-[0.2em] text-white/50">
+              {rotatorState.activeIndex + 1} / {rotatorState.modules.length}
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-hidden rounded-[18px] border border-white/10 bg-black/20 p-3">
+            <div className={`h-full transition-all duration-500 ${ROTATOR_ANIMATIONS[rotatorState.animation] || ''}`}>
+              <ModulePreview type={activeModule.type} theme={theme} module={activeModule} now={now} />
+            </div>
+          </div>
+          <RotatorIndicator
+            pageCount={rotatorState.modules.length}
+            activeIndex={rotatorState.activeIndex}
+            progress={rotatorState.progress}
+          />
+        </div>
+      );
+    }
     case 'clock': {
       const variant = getClockVariant(module);
       const meta = buildClockPreviewMeta();
