@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/date_symbol_data_local.dart';
 import 'services/config_service.dart';
+import 'services/context_service.dart';
 import 'services/event_bus.dart';
 import 'widgets/flex_grid.dart';
 
@@ -80,6 +82,7 @@ class MirrorialApp extends ConsumerWidget {
                 children: [
                   _DisplayStatusReporter(config: config),
                   const FlexGrid(),
+                  const BirthdayCelebrationOverlay(),
                   const AlertOverlay(),
                 ],
               ),
@@ -218,5 +221,174 @@ class AlertOverlay extends ConsumerWidget {
       case SystemEventType.calendarAlert: return Icons.event_available_rounded;
       default: return Icons.info_outline_rounded;
     }
+  }
+}
+
+class BirthdayCelebrationOverlay extends ConsumerStatefulWidget {
+  const BirthdayCelebrationOverlay({super.key});
+
+  @override
+  ConsumerState<BirthdayCelebrationOverlay> createState() => _BirthdayCelebrationOverlayState();
+}
+
+class _BirthdayCelebrationOverlayState extends ConsumerState<BirthdayCelebrationOverlay> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  bool _visible = false;
+  DateTime? _lastShownAt;
+  Timer? _timer;
+  String _headline = '';
+  String? _birthdaySignature;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final snapshot = ref.watch(contextSnapshotProvider).value;
+    final birthday = snapshot?.birthdayContext;
+    final nextSignature = birthday == null ? null : '${birthday.memberId}:${birthday.isToday}:${birthday.turning}:${birthday.allowAgeReveal}';
+    if (_birthdaySignature != nextSignature) {
+      _birthdaySignature = nextSignature;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _syncSchedule(birthday);
+        }
+      });
+    }
+
+    if (!_visible || birthday == null || !birthday.isToday) {
+      return const SizedBox.shrink();
+    }
+
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, _) {
+            final progress = Curves.easeOutCubic.transform(_controller.value);
+            return Opacity(
+              opacity: progress,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: 0.18),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+                child: Stack(
+                  children: [
+                    ...List.generate(18, (index) {
+                      final horizontal = (index % 6) / 5;
+                      final vertical = ((index * 37) % 100) / 100;
+                      final drift = (index.isEven ? 1 : -1) * 12 * progress;
+                      return Positioned(
+                        left: (MediaQuery.of(context).size.width * horizontal) + drift,
+                        top: (MediaQuery.of(context).size.height * vertical) - (40 * progress),
+                        child: Icon(
+                          index.isEven ? Icons.celebration_rounded : Icons.cake_rounded,
+                          color: index.isEven ? const Color(0xFFF59E0B) : const Color(0xFFF472B6),
+                          size: 20 + ((index % 4) * 6),
+                        ),
+                      );
+                    }),
+                    Center(
+                      child: Transform.scale(
+                        scale: 0.92 + (0.08 * progress),
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 42),
+                          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.54),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.45), width: 2),
+                          ),
+                          child: Text(
+                            _headline,
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.displayLarge?.copyWith(
+                                  fontSize: 34,
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  void _syncSchedule(BirthdayContext? birthday) {
+    _timer?.cancel();
+    if (birthday == null || !birthday.isToday) {
+      return;
+    }
+
+    final now = DateTime.now();
+    if (_shouldShowNow(now)) {
+      _showBirthday(birthday);
+    }
+    final nextSlotMinute = now.minute < 30 ? 30 : 60;
+    final nextSlot = DateTime(now.year, now.month, now.day, now.hour, 0).add(Duration(minutes: nextSlotMinute));
+    final delay = nextSlot.difference(now);
+    _timer = Timer(delay, () {
+      if (mounted) {
+        _showBirthday(birthday);
+        _syncSchedule(birthday);
+      }
+    });
+  }
+
+  bool _shouldShowNow(DateTime now) {
+    if (_lastShownAt == null) {
+      return true;
+    }
+    return now.difference(_lastShownAt!).inMinutes >= 30;
+  }
+
+  void _showBirthday(BirthdayContext birthday) {
+    final messages = <String>[
+      'Happy Birthday, ${birthday.memberName}!',
+      'Alles Gute zum Geburtstag, ${birthday.memberName}!',
+      'A very happy birthday to ${birthday.memberName}!',
+      '${birthday.memberName}, today is your day!',
+      if (birthday.allowAgeReveal && birthday.turning != null) '${birthday.memberName}, you are ${birthday.turning} today!',
+    ];
+    _headline = messages[DateTime.now().minute % messages.length];
+    _lastShownAt = DateTime.now();
+    setState(() {
+      _visible = true;
+    });
+    _controller.forward(from: 0);
+    Timer(const Duration(seconds: 8), () {
+      if (!mounted) {
+        return;
+      }
+      _controller.reverse();
+      setState(() {
+        _visible = false;
+      });
+    });
   }
 }

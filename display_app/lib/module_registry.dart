@@ -5,6 +5,7 @@ import 'widgets/modules/weather_module.dart';
 import 'widgets/modules/ha_module.dart';
 import 'widgets/modules/calendar_module.dart';
 import 'widgets/modules/daily_brief_module.dart';
+import 'widgets/modules/travel_time_module.dart';
 
 /// The central registry for all Mirrorial Modules.
 /// To add a 3rd-party module:
@@ -27,6 +28,8 @@ Widget buildModuleFromRegistry(
       return CalendarModule(config: config, layoutData: layoutData, rootConfig: rootConfig);
     case 'daily_brief':
       return DailyBriefModule(config: config, layoutData: layoutData, rootConfig: rootConfig);
+    case 'travel_time':
+      return TravelTimeModule(config: config, layoutData: layoutData, rootConfig: rootConfig);
       
     // -----------------------------------------
     // ADD 3RD-PARTY MODULES BELOW THIS LINE

@@ -43,8 +43,10 @@ test('buildBirthdayContext prioritizes the nearest upcoming birthday', () => {
       {
         id: 'anna',
         name: 'Anna',
+        nickname: 'Anni',
         birthdate: localDateOffsetString(1),
         shareInBrief: true,
+        allowAgeReveal: true,
       },
       {
         id: 'ben',
@@ -57,9 +59,10 @@ test('buildBirthdayContext prioritizes the nearest upcoming birthday', () => {
 
   const birthday = buildBirthdayContext(household);
 
-  assert.equal(birthday.memberName, 'Anna');
+  assert.equal(birthday.memberName, 'Anni');
   assert.equal(birthday.isTomorrow, true);
   assert.equal(birthday.isToday, false);
+  assert.equal(birthday.allowAgeReveal, true);
 });
 
 test('estimateRouteFallback returns duration and distance for a local commute', () => {
@@ -219,6 +222,106 @@ test('normalizeConfig preserves separate portrait and landscape layouts', () => 
   assert.equal(normalized.gridLayouts.portrait.modules[0].id, 'clock_portrait');
   assert.equal(normalized.gridLayouts.landscape.modules[0].id, 'clock_landscape');
   assert.equal(normalized.gridLayout.modules[0].id, 'clock_portrait');
+});
+
+test('normalizeConfig keeps shared travel time module settings and applies them to layout modules', () => {
+  const normalized = normalizeConfig({
+    moduleSettings: {
+      travel_time: {
+        items: [
+          {
+            id: 'route_1',
+            label: 'Office',
+            originType: 'custom',
+            originAddress: 'Schottmuellerstrasse 15, Hamburg, Germany',
+            destinationType: 'custom',
+            destinationAddress: 'Siemensstrasse 22, Rellingen, Germany',
+            mode: 'car',
+          },
+        ],
+      },
+    },
+    gridLayout: {
+      modules: [
+        {
+          id: 'travel_1',
+          type: 'travel_time',
+          x: 0,
+          y: 0,
+          w: 2,
+          h: 2,
+          config: {},
+        },
+      ],
+    },
+  });
+
+  assert.equal(normalized.moduleSettings.travel_time.items.length, 1);
+  assert.equal(normalized.gridLayout.modules[0].config.items.length, 1);
+  assert.equal(normalized.gridLayout.modules[0].config.items[0].label, 'Office');
+});
+
+test('normalizeConfig merges travel settings into legacy transport and routing compatibility blocks', () => {
+  const normalized = normalizeConfig({
+    services: {
+      travel: {
+        enabled: true,
+        transportProvider: 'aviationstack',
+        routingProvider: 'openrouteservice',
+        routingBaseUrl: 'https://api.openrouteservice.org',
+        routingProfile: 'cycling-regular',
+        homeAirport: 'HAM',
+        closestTrainStation: 'Hamburg Hbf',
+        closestBusStation: 'Mundsburger Bruecke',
+        closestTubeStation: 'Kellinghusenstrasse',
+        refreshMinutes: 45,
+      },
+    },
+  });
+
+  assert.equal(normalized.services.travel.transportProvider, 'aviationstack');
+  assert.equal(normalized.services.transport.provider, 'aviationstack');
+  assert.equal(normalized.services.routing.provider, 'openrouteservice');
+  assert.equal(normalized.services.routing.baseUrl, 'https://api.openrouteservice.org');
+  assert.equal(normalized.services.routing.profile, 'cycling-regular');
+  assert.equal(normalized.services.transport.homeAirport, 'HAM');
+  assert.equal(normalized.services.transport.homeStation, 'Hamburg Hbf');
+  assert.equal(normalized.services.travel.closestBusStation, 'Mundsburger Bruecke');
+  assert.equal(normalized.services.travel.closestTubeStation, 'Kellinghusenstrasse');
+  assert.equal(normalized.services.routing.refreshMinutes, 45);
+});
+
+test('normalizeConfig allows travel routing base URL to be cleared without restoring legacy routing baseUrl', () => {
+  const normalized = normalizeConfig({
+    services: {
+      routing: {
+        baseUrl: 'bernd@test.com',
+      },
+      travel: {
+        routingProvider: 'openrouteservice',
+        routingBaseUrl: '',
+      },
+    },
+  });
+
+  assert.equal(normalized.services.travel.routingBaseUrl, '');
+  assert.equal(normalized.services.routing.baseUrl, '');
+});
+
+test('normalizeConfig migrates legacy google_routes provider into the new travel google flags', () => {
+  const normalized = normalizeConfig({
+    services: {
+      routing: {
+        provider: 'google_routes',
+      },
+    },
+  });
+
+  assert.equal(normalized.services.travel.routingProvider, 'none');
+  assert.equal(normalized.services.travel.googleRoutesEnabled, true);
+  assert.equal(normalized.services.travel.googleRoutesForAllModes, true);
+  assert.equal(normalized.services.routing.provider, 'none');
+  assert.equal(normalized.services.routing.googleRoutesEnabled, true);
 });
 
 test('inferTripAnchorFromEvent suppresses home-address-like destinations unless explicitly useful', () => {

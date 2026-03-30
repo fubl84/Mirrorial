@@ -31,6 +31,11 @@ import {
 import MirrorPreview from './components/MirrorPreview';
 
 const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:3000/api' : '/api';
+const APP_VERSION = '1.0';
+const FONT_PREVIEW_STYLESHEETS = {
+  Roboto: 'https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap',
+  Montserrat: 'https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700&display=swap',
+};
 const DEFAULT_HOUSEHOLD = {
   home: {
     label: 'Home',
@@ -47,6 +52,7 @@ const MODULE_TYPES = [
   { id: 'home_assistant', label: 'Home Assistant', icon: '🏠' },
   { id: 'calendar', label: 'Calendar Feed', icon: '📅' },
   { id: 'daily_brief', label: 'AI / Daily Brief', icon: '🧭' },
+  { id: 'travel_time', label: 'Travel Time', icon: '🚗' },
   { id: 'module_rotator', label: 'Auto-Rotating Module Box', icon: '🪄' },
 ];
 
@@ -84,6 +90,11 @@ const MODULE_SIZE_PRESETS = {
     compact: { label: 'Compact', w: 1, h: 1 },
     standard: { label: 'Panel', w: 2, h: 2 },
     detail: { label: 'Detail', w: 2, h: 3 },
+  },
+  travel_time: {
+    compact: { label: 'Compact', w: 2, h: 2 },
+    standard: { label: 'Standard', w: 2, h: 3 },
+    showcase: { label: 'Showcase', w: 4, h: 3 },
   },
   module_rotator: {
     compact: { label: 'Compact', w: 2, h: 2 },
@@ -234,11 +245,11 @@ const CONFIG_TABS = [
 
 const INTEGRATION_SECTIONS = [
   { id: 'google', label: 'Google Calendar', eyebrow: 'Account', description: 'OAuth credentials and account connection.' },
+  { id: 'calendar_sources', label: 'Calendar Sources', eyebrow: 'Sources', description: 'ICS feeds, CalDAV accounts, and multi-source sync.' },
   { id: 'weather', label: 'Weather', eyebrow: 'Feed', description: 'Location, provider, and refresh behavior.' },
   { id: 'home_assistant', label: 'Home Assistant', eyebrow: 'Smart Home', description: 'Connection status, activation, entity discovery, and tile configuration.' },
   { id: 'llm', label: 'LLM Context', eyebrow: 'AI', description: 'Provider setup, refresh cadence, and privacy mode.' },
-  { id: 'transport', label: 'Transport', eyebrow: 'Travel', description: 'Flight and station enrichment sources.' },
-  { id: 'routing', label: 'Routing', eyebrow: 'Travel Time', description: 'Route estimates and provider credentials.' },
+  { id: 'travel', label: 'Travel', eyebrow: 'Travel', description: 'Flight enrichment, route providers, transit anchors, and refresh behavior.' },
   { id: 'module_inputs', label: 'Module Inputs', eyebrow: 'Modules', description: 'Separate inputs for Calendar and Daily Brief modules.' },
 ];
 
@@ -367,6 +378,65 @@ const HomeAssistantIconPreview = ({ iconId, className = 'h-4 w-4' }) => {
   return <Icon className={className} />;
 };
 
+const FeedbackToastViewport = ({ toasts, onDismiss }) => (
+  <div className="fixed right-4 top-4 z-[90] flex w-full max-w-sm flex-col gap-3">
+    {toasts.map((toast) => (
+      <div
+        key={toast.id}
+        className={`rounded-2xl border px-4 py-3 shadow-2xl backdrop-blur ${
+          toast.tone === 'error'
+            ? 'border-rose-400/30 bg-rose-500/15 text-rose-100'
+            : toast.tone === 'warning'
+              ? 'border-amber-400/30 bg-amber-500/15 text-amber-50'
+              : 'border-emerald-400/30 bg-emerald-500/15 text-emerald-50'
+        }`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold">{toast.title}</div>
+            {toast.message && <div className="mt-1 text-sm opacity-90">{toast.message}</div>}
+          </div>
+          <button onClick={() => onDismiss(toast.id)} className="text-xs uppercase tracking-wider opacity-70 transition hover:opacity-100">
+            Close
+          </button>
+        </div>
+      </div>
+    ))}
+  </div>
+);
+
+const OverlayDialog = ({ dialog, onClose, onConfirm }) => {
+  if (!dialog) {
+    return null;
+  }
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-[28px] border border-slate-800 bg-slate-900 p-6 shadow-2xl shadow-black/60">
+        <div className="text-xs font-bold uppercase tracking-[0.24em] text-slate-500">{dialog.eyebrow || 'Attention'}</div>
+        <h3 className="mt-3 text-xl font-semibold text-white">{dialog.title}</h3>
+        <p className="mt-3 text-sm leading-6 text-slate-300 whitespace-pre-line">{dialog.message}</p>
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
+          >
+            {dialog.cancelLabel || 'Cancel'}
+          </button>
+          {dialog.confirmLabel && (
+            <button
+              onClick={onConfirm}
+              className="rounded-xl bg-gradient-to-r from-[#ff86d3] via-[#ff8ea8] to-[#ffb28f] px-4 py-3 text-sm font-semibold text-slate-950 transition hover:brightness-105"
+            >
+              {dialog.confirmLabel}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const buildDefaultModuleConfig = (type) => {
   switch (type) {
     case 'weather':
@@ -387,6 +457,10 @@ const buildDefaultModuleConfig = (type) => {
       return { maxItems: 5, viewMode: 'list', daysToShow: 4, calendarColors: {} };
     case 'daily_brief':
       return { maxItems: 3, pageSeconds: 10 };
+    case 'travel_time':
+      return {
+        items: [],
+      };
     default:
       return {};
   }
@@ -712,6 +786,8 @@ function App() {
   const [activeTab, setActiveTab] = useState('display');
   const [googleStatus, setGoogleStatus] = useState(null);
   const [googleCalendars, setGoogleCalendars] = useState([]);
+  const [availableCalendars, setAvailableCalendars] = useState([]);
+  const [calendarSources, setCalendarSources] = useState([]);
   const [selectedCalendarIds, setSelectedCalendarIds] = useState([]);
   const [calendarSaving, setCalendarSaving] = useState(false);
   const [activeIntegrationSection, setActiveIntegrationSection] = useState('google');
@@ -722,11 +798,16 @@ function App() {
   const [displayStatus, setDisplayStatus] = useState(null);
   const [dailyBriefDebug, setDailyBriefDebug] = useState(null);
   const [dailyBriefDebugLoading, setDailyBriefDebugLoading] = useState(false);
+  const [travelTimeDebug, setTravelTimeDebug] = useState(null);
+  const [travelTimeDebugLoading, setTravelTimeDebugLoading] = useState(false);
   const [haEntities, setHaEntities] = useState([]);
   const [haEntitiesLoading, setHaEntitiesLoading] = useState(false);
   const [haEntitiesError, setHaEntitiesError] = useState('');
   const [haEntityQuery, setHaEntityQuery] = useState('');
   const [haEntityDomainFilter, setHaEntityDomainFilter] = useState('all');
+  const [systemCapabilities, setSystemCapabilities] = useState(null);
+  const [toasts, setToasts] = useState([]);
+  const [dialogState, setDialogState] = useState(null);
   const currentEditingLayout = config?.gridLayouts?.[activeLayoutOrientation] || config?.gridLayout || null;
 
   useEffect(() => {
@@ -734,14 +815,47 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const selectedFont = config?.theme?.fontFamily;
+    const stylesheetHref = selectedFont ? FONT_PREVIEW_STYLESHEETS[selectedFont] : null;
+    const linkId = 'mirrorial-font-preview';
+    const existing = document.getElementById(linkId);
+
+    if (!stylesheetHref) {
+      existing?.remove();
+      return undefined;
+    }
+
+    if (existing instanceof HTMLLinkElement) {
+      if (existing.href !== stylesheetHref) {
+        existing.href = stylesheetHref;
+      }
+      return undefined;
+    }
+
+    const link = document.createElement('link');
+    link.id = linkId;
+    link.rel = 'stylesheet';
+    link.href = stylesheetHref;
+    document.head.appendChild(link);
+
+    return () => {
+      if (document.getElementById(linkId) === link) {
+        link.remove();
+      }
+    };
+  }, [config?.theme?.fontFamily]);
+
+  useEffect(() => {
     if (activeTab === 'integrations' || activeTab === 'household') {
       refreshGoogleState();
+      refreshCalendarSources();
     }
   }, [activeTab]);
 
   useEffect(() => {
     if (activeTab === 'layout' || activeTab === 'display') {
       refreshDisplayStatus();
+      refreshSystemCapabilities();
     }
   }, [activeTab]);
 
@@ -754,6 +868,12 @@ function App() {
   useEffect(() => {
     if (activeTab === 'integrations' && activeIntegrationSection === 'home_assistant') {
       refreshHomeAssistantEntities();
+    }
+  }, [activeTab, activeIntegrationSection]);
+
+  useEffect(() => {
+    if (activeTab === 'integrations' && activeIntegrationSection === 'travel') {
+      refreshTravelTimeDebug();
     }
   }, [activeTab, activeIntegrationSection]);
 
@@ -771,12 +891,59 @@ function App() {
     }
   }, [currentEditingLayout, selectedLayoutModuleId]);
 
+  const dismissToast = (toastId) => {
+    setToasts((current) => current.filter((toast) => toast.id !== toastId));
+  };
+
+  const pushToast = (title, message = '', tone = 'success') => {
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    setToasts((current) => [...current, { id, title, message, tone }]);
+    window.setTimeout(() => {
+      dismissToast(id);
+    }, tone === 'error' ? 6000 : 3000);
+  };
+
+  const showErrorDialog = (title, message) => {
+    setDialogState({
+      eyebrow: 'Error',
+      title,
+      message,
+      cancelLabel: 'Close',
+      confirmLabel: null,
+      onConfirm: null,
+    });
+  };
+
+  const confirmAction = ({ title, message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', onConfirm, eyebrow = 'Confirm' }) => {
+    setDialogState({
+      title,
+      message,
+      confirmLabel,
+      cancelLabel,
+      eyebrow,
+      onConfirm,
+    });
+  };
+
+  const closeDialog = () => setDialogState(null);
+
+  const handleDialogConfirm = async () => {
+    const callback = dialogState?.onConfirm;
+    setDialogState(null);
+    if (typeof callback === 'function') {
+      await callback();
+    }
+  };
+
   const fetchInitialData = async () => {
     try {
-      const [configResponse, householdResponse, displayStatusResponse] = await Promise.all([
+      const [configResponse, householdResponse, displayStatusResponse, systemCapabilitiesResponse, calendarsResponse, calendarSourcesResponse] = await Promise.all([
         axios.get(`${API_BASE}/config`),
         axios.get(`${API_BASE}/household`),
         axios.get(`${API_BASE}/display/status`).catch(() => ({ data: null })),
+        axios.get(`${API_BASE}/system/capabilities`).catch(() => ({ data: null })),
+        axios.get(`${API_BASE}/calendars`).catch(() => ({ data: null })),
+        axios.get(`${API_BASE}/calendar-sources`).catch(() => ({ data: { sources: [] } })),
       ]);
       const moduleSettings = normalizeModuleSettingsDraft(
         configResponse.data.moduleSettings || {},
@@ -802,10 +969,40 @@ function App() {
       setActiveLayoutOrientation(initialOrientation);
       setHousehold(householdResponse.data);
       setDisplayStatus(displayStatusResponse.data);
+      setSystemCapabilities(systemCapabilitiesResponse.data);
+      setAvailableCalendars(calendarsResponse.data?.calendars || []);
+      setCalendarSources(calendarSourcesResponse.data?.sources || []);
     } catch (error) {
-      alert('Failed to fetch settings.');
+      showErrorDialog('Failed to load settings', 'The configuration console could not fetch the current settings from the backend.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshSystemCapabilities = async () => {
+    try {
+      const response = await axios.get(`${API_BASE}/system/capabilities`);
+      setSystemCapabilities(response.data);
+    } catch (error) {
+      setSystemCapabilities(null);
+    }
+  };
+
+  const refreshCalendarState = async () => {
+    try {
+      const response = await axios.get(`${API_BASE}/calendars`);
+      setAvailableCalendars(response.data.calendars || []);
+    } catch (error) {
+      setAvailableCalendars([]);
+    }
+  };
+
+  const refreshCalendarSources = async () => {
+    try {
+      const response = await axios.get(`${API_BASE}/calendar-sources`);
+      setCalendarSources(response.data.sources || []);
+    } catch (error) {
+      setCalendarSources([]);
     }
   };
 
@@ -822,6 +1019,7 @@ function App() {
         setGoogleCalendars([]);
         setSelectedCalendarIds(statusResponse.data.selectedCalendarIds || []);
       }
+      refreshCalendarState();
     } catch (error) {
       setGoogleCalendars([]);
     }
@@ -845,6 +1043,34 @@ function App() {
       setDailyBriefDebug(null);
     } finally {
       setDailyBriefDebugLoading(false);
+    }
+  };
+
+  const refreshTravelTimeDebug = async () => {
+    setTravelTimeDebugLoading(true);
+    try {
+      const response = await axios.get(`${API_BASE}/debug/travel-time`);
+      setTravelTimeDebug(response.data);
+    } catch (error) {
+      setTravelTimeDebug(null);
+    } finally {
+      setTravelTimeDebugLoading(false);
+    }
+  };
+
+  const runTravelTimeDebug = async () => {
+    setTravelTimeDebugLoading(true);
+    try {
+      await axios.post(`${API_BASE}/display/travel-time`, {
+        items: travelTimeModuleConfig.items || [],
+      });
+      const response = await axios.get(`${API_BASE}/debug/travel-time`);
+      setTravelTimeDebug(response.data);
+      pushToast('Travel debug updated', 'The backend recalculated the configured Travel Time routes.', 'success');
+    } catch (error) {
+      showErrorDialog('Travel debug failed', error.response?.data?.error || 'The backend could not recalculate the Travel Time routes.');
+    } finally {
+      setTravelTimeDebugLoading(false);
     }
   };
 
@@ -881,29 +1107,29 @@ function App() {
       const response = await axios.post(`${API_BASE}/debug/daily-brief/rebuild`);
       setDailyBriefDebug(response.data.debug || null);
     } catch (error) {
-      alert('Failed to rebuild Daily Brief debug data.');
+      showErrorDialog('Daily Brief rebuild failed', 'The backend could not rebuild the Daily Brief debug payload.');
     } finally {
       setDailyBriefDebugLoading(false);
     }
   };
 
   const forceContextRefresh = async () => {
-    const confirmed = window.confirm(
-      'Are you sure you want to force a Daily Brief refresh now?\n\nThis may trigger weather, transport, routing, and LLM requests and can cause external API or token costs.',
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setDailyBriefDebugLoading(true);
-    try {
-      await axios.post(`${API_BASE}/debug/daily-brief/rebuild`);
-      alert('Daily Brief context refreshed.');
-    } catch (error) {
-      alert('Failed to refresh Daily Brief context.');
-    } finally {
-      setDailyBriefDebugLoading(false);
-    }
+    confirmAction({
+      title: 'Force Daily Brief refresh?',
+      message: 'This may trigger weather, travel, routing, and LLM requests and can cause external API or token costs.',
+      confirmLabel: 'Refresh now',
+      onConfirm: async () => {
+        setDailyBriefDebugLoading(true);
+        try {
+          await axios.post(`${API_BASE}/debug/daily-brief/rebuild`);
+          pushToast('Daily Brief refreshed', 'The context payload has been rebuilt.', 'success');
+        } catch (error) {
+          showErrorDialog('Daily Brief refresh failed', 'The backend could not refresh the Daily Brief context.');
+        } finally {
+          setDailyBriefDebugLoading(false);
+        }
+      },
+    });
   };
 
   const saveConfig = async () => {
@@ -930,28 +1156,33 @@ function App() {
         ),
       });
       setHousehold(householdResponse.data.household);
-      alert('Settings saved successfully.');
+      pushToast('Settings saved', 'Configuration and household data were persisted successfully.', 'success');
       if (activeTab === 'integrations') {
         refreshGoogleState();
+        refreshCalendarSources();
       }
     } catch (error) {
-      alert('Failed to save settings.');
+      showErrorDialog('Save failed', 'The backend rejected the current configuration or household payload.');
     } finally {
       setSaving(false);
     }
   };
 
   const runCommand = async (command) => {
-    if (!window.confirm(`Are you sure you want to trigger ${command}?`)) {
-      return;
-    }
-
-    try {
-      await axios.post(`${API_BASE}/system/${command}`);
-      alert(`Command ${command} sent.`);
-    } catch (error) {
-      alert('Command failed.');
-    }
+    confirmAction({
+      title: `Trigger ${command}?`,
+      message: `This sends the system command "${command}" to the mirror backend.`,
+      confirmLabel: 'Send command',
+      onConfirm: async () => {
+        try {
+          await axios.post(`${API_BASE}/system/${command}`);
+          pushToast('Command sent', `The mirror accepted ${command}.`, 'success');
+          refreshSystemCapabilities();
+        } catch (error) {
+          showErrorDialog('Command failed', error.response?.data?.error || 'The system command could not be executed on this device.');
+        }
+      },
+    });
   };
 
   const updateConfig = (updater) => {
@@ -1065,6 +1296,22 @@ function App() {
     });
   };
 
+  const updateTravelTimeConfigState = (updater) => {
+    updateConfig((draft) => {
+      const moduleSettings = ensureModuleSettings(draft);
+      const currentConfig = normalizeSharedModuleConfig('travel_time', moduleSettings.travel_time || {});
+      moduleSettings.travel_time = normalizeSharedModuleConfig('travel_time', updater(currentConfig));
+      draft.moduleSettings = moduleSettings;
+      const gridLayouts = ensureGridLayouts(draft);
+      draft.gridLayouts = {
+        portrait: normalizeGridLayoutDraft(gridLayouts.portrait, moduleSettings, 'portrait'),
+        landscape: normalizeGridLayoutDraft(gridLayouts.landscape, moduleSettings, 'landscape'),
+      };
+      draft.gridLayout = draft.gridLayouts.portrait;
+      return draft;
+    });
+  };
+
   const addHomeAssistantEntity = (entity) => {
     updateHomeAssistantConfigState((currentConfig) => {
       if (currentConfig.entityCards.some((card) => card.entityId === entity.id)) {
@@ -1135,10 +1382,12 @@ function App() {
       draft.members.push({
         id: `member_${Date.now()}`,
         name: '',
+        nickname: '',
         birthdate: '',
         calendarIds: [],
         tags: [],
         shareInBrief: true,
+        allowAgeReveal: false,
         commute: { mode: 'auto' },
         places: {
           work: { label: 'Work', address: '', location: null },
@@ -1177,6 +1426,44 @@ function App() {
       draft.savedPlaces = (draft.savedPlaces || []).filter((place) => place.id !== placeId);
       return draft;
     });
+  };
+
+  const createTravelRouteItem = () => ({
+    id: `travel_route_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    label: '',
+    enabled: true,
+    originType: 'home',
+    originReferenceId: '',
+    originLabel: '',
+    originAddress: '',
+    destinationType: 'custom',
+    destinationReferenceId: '',
+    destinationLabel: '',
+    destinationAddress: '',
+    mode: 'car',
+  });
+
+  const addTravelRouteItem = () => {
+    updateTravelTimeConfigState((currentConfig) => ({
+      ...currentConfig,
+      items: [...(currentConfig.items || []), createTravelRouteItem()],
+    }));
+  };
+
+  const updateTravelRouteItem = (itemId, changes) => {
+    updateTravelTimeConfigState((currentConfig) => ({
+      ...currentConfig,
+      items: (currentConfig.items || []).map((item) => (
+        item.id === itemId ? { ...item, ...changes } : item
+      )),
+    }));
+  };
+
+  const removeTravelRouteItem = (itemId) => {
+    updateTravelTimeConfigState((currentConfig) => ({
+      ...currentConfig,
+      items: (currentConfig.items || []).filter((item) => item.id !== itemId),
+    }));
   };
 
   const resolvePresetSizeForLayout = (gridLayout, preset) => {
@@ -1252,7 +1539,7 @@ function App() {
       const modules = gridLayout.modules || [];
       const placement = findAvailableModulePlacement(type, moduleId, gridLayout);
       if (!placement) {
-        alert('No free space is available for a new module in this layout. Remove or resize an existing module first.');
+        pushToast('No space available', 'Remove or resize an existing module before adding another one.', 'warning');
         return draft;
       }
       modules.push({
@@ -1381,6 +1668,22 @@ function App() {
         if (isModulePlacementValid(gridLayout, nextModule.id, nextModule.x, nextModule.y, nextModule.w, nextModule.h)) {
           gridLayout.modules[moduleIndex] = nextModule;
         }
+      }
+      draft.gridLayouts[activeLayoutOrientation] = gridLayout;
+      draft.gridLayout = draft.gridLayouts.portrait;
+      return draft;
+    });
+  };
+
+  const updateGridModuleConfig = (moduleId, updater) => {
+    updateConfig((draft) => {
+      const moduleSettings = ensureModuleSettings(draft);
+      const gridLayout = normalizeGridLayoutDraft(ensureGridLayout(draft), moduleSettings, activeLayoutOrientation);
+      const moduleIndex = gridLayout.modules.findIndex((entry) => entry.id === moduleId);
+      const module = moduleIndex >= 0 ? gridLayout.modules[moduleIndex] : null;
+      if (module) {
+        const nextConfig = typeof updater === 'function' ? updater({ ...(module.config || {}) }) : updater;
+        gridLayout.modules[moduleIndex] = normalizeGridModule({ ...module, config: nextConfig }, gridLayout, moduleSettings);
       }
       draft.gridLayouts[activeLayoutOrientation] = gridLayout;
       draft.gridLayout = draft.gridLayouts.portrait;
@@ -1518,7 +1821,7 @@ function App() {
   const connectGoogle = () => {
     const popup = window.open(`${API_BASE}/auth/google/start`, 'mirrorial-google-auth', 'popup=yes,width=540,height=720');
     if (!popup) {
-      alert('The popup was blocked by your browser.');
+      showErrorDialog('Popup blocked', 'The browser blocked the Google OAuth popup. Allow popups for this console and try again.');
       return;
     }
 
@@ -1530,8 +1833,9 @@ function App() {
       window.removeEventListener('message', onMessage);
       if (event.data.success) {
         refreshGoogleState();
+        pushToast('Google connected', 'The Google account connection completed successfully.', 'success');
       } else {
-        alert(event.data.payload?.error || 'Google authentication failed.');
+        showErrorDialog('Google authentication failed', event.data.payload?.error || 'Google authentication failed.');
       }
     };
 
@@ -1542,8 +1846,9 @@ function App() {
     try {
       await axios.post(`${API_BASE}/auth/google/disconnect`);
       await refreshGoogleState();
+      pushToast('Google disconnected', 'The Google account has been disconnected from this mirror.', 'success');
     } catch (error) {
-      alert('Failed to disconnect Google.');
+      showErrorDialog('Disconnect failed', 'The Google account could not be disconnected.');
     }
   };
 
@@ -1552,11 +1857,49 @@ function App() {
     try {
       await axios.post(`${API_BASE}/google/calendars/select`, { selectedCalendarIds });
       await refreshGoogleState();
-      alert('Calendar selection saved.');
+      pushToast('Calendar selection saved', 'Google calendar selection has been updated.', 'success');
     } catch (error) {
-      alert('Failed to save calendar selection.');
+      showErrorDialog('Calendar selection failed', 'The selected Google calendars could not be saved.');
     } finally {
       setCalendarSaving(false);
+    }
+  };
+
+  const addCalendarSource = (type = 'ics') => {
+    setCalendarSources((current) => ([
+      ...current,
+      {
+        id: `calendar_source_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        type,
+        name: '',
+        enabled: true,
+        url: '',
+        username: '',
+        password: '',
+        passwordConfigured: false,
+        color: '',
+      },
+    ]));
+  };
+
+  const updateCalendarSource = (sourceId, changes) => {
+    setCalendarSources((current) => current.map((source) => (
+      source.id === sourceId ? { ...source, ...changes } : source
+    )));
+  };
+
+  const removeCalendarSource = (sourceId) => {
+    setCalendarSources((current) => current.filter((source) => source.id !== sourceId));
+  };
+
+  const saveCalendarSources = async () => {
+    try {
+      const response = await axios.post(`${API_BASE}/calendar-sources`, { sources: calendarSources });
+      setCalendarSources(response.data.sources || []);
+      setAvailableCalendars(response.data.calendars || []);
+      pushToast('Calendar sources saved', 'ICS and CalDAV sources were updated and synced.', 'success');
+    } catch (error) {
+      showErrorDialog('Calendar source save failed', error.response?.data?.error || 'The calendar sources could not be saved.');
     }
   };
 
@@ -1571,8 +1914,7 @@ function App() {
 
   const googleConfig = config.services.google;
   const llmConfig = config.services.llm;
-  const transportConfig = config.services.transport;
-  const routingConfig = config.services.routing;
+  const travelConfig = config.services.travel || {};
   const contextConfig = config.services.context;
   const dailyBriefSignals = contextConfig.signals || {};
   const dailyBriefCalendarMode = contextConfig.briefCalendarMode || 'exclude_selected';
@@ -1587,6 +1929,7 @@ function App() {
   const weatherConfig = getModuleSettings('weather');
   const haEntityMap = new Map(haEntities.map((entity) => [entity.id, entity]));
   const homeAssistantConfig = getModuleSettings('home_assistant', haEntityMap);
+  const travelTimeModuleConfig = getModuleSettings('travel_time');
   const selectedHomeAssistantEntityIds = new Set(homeAssistantConfig.entityCards.map((card) => card.entityId));
   const homeAssistantDomains = Array.from(haEntities.reduce((map, entity) => {
     const domain = entity.domain || getHomeAssistantDomain(entity.id);
@@ -1791,6 +2134,19 @@ function App() {
       );
     }
 
+    if (selectedLayoutModule.type === 'travel_time') {
+      return (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-3 text-xs text-slate-500">
+            Route cards are now managed in Integrations → Travel so the same route set is shared by normal Travel Time modules and rotator children.
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-sm text-slate-300">
+            {travelTimeModuleConfig.items?.length || 0} route card{travelTimeModuleConfig.items?.length === 1 ? '' : 's'} configured.
+          </div>
+        </div>
+      );
+    }
+
     if (selectedLayoutModule.type === 'module_rotator') {
       const rotatorConfig = normalizeRotatorConfig(selectedLayoutModule.config || {}, config.moduleSettings);
       return (
@@ -1883,6 +2239,8 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200">
+      <FeedbackToastViewport toasts={toasts} onDismiss={dismissToast} />
+      <OverlayDialog dialog={dialogState} onClose={closeDialog} onConfirm={handleDialogConfirm} />
       <div className="w-full p-4 md:p-8">
         <div className="grid gap-8 xl:grid-cols-[280px,minmax(0,1fr)]">
           <aside className="space-y-4">
@@ -2094,19 +2452,41 @@ function App() {
 
               <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
                 <h2 className="text-lg font-semibold mb-6 text-white">System Actions</h2>
+                {systemCapabilities && (
+                  <div className="mb-4 rounded-xl border border-slate-800 bg-slate-950/70 p-4 text-sm text-slate-400">
+                    Backend: <span className="font-semibold text-white">{systemCapabilities.commandBackend || 'unknown'}</span>
+                    {systemCapabilities.isPi ? ' on Raspberry Pi hardware.' : ' on a non-Pi device.'}
+                  </div>
+                )}
                 <div className="grid grid-cols-1 gap-3">
-                  <button onClick={() => runCommand('restart-display')} className="flex items-center gap-3 bg-slate-800 hover:bg-slate-700 p-4 rounded-xl transition-all active:scale-95">
+                  <button
+                    onClick={() => runCommand('restart-display')}
+                    disabled={systemCapabilities && !systemCapabilities.canRestartDisplay}
+                    className="flex items-center gap-3 bg-slate-800 hover:bg-slate-700 p-4 rounded-xl transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
                     <RefreshCcw size={18} className="text-amber-500" />
                     <div className="text-left">
                       <div className="font-semibold">Restart Display</div>
-                      <div className="text-xs text-slate-500">Restart the Flutter display process</div>
+                      <div className="text-xs text-slate-500">
+                        {systemCapabilities && !systemCapabilities.canRestartDisplay
+                          ? 'Unavailable on this device backend'
+                          : 'Restart the Flutter display process'}
+                      </div>
                     </div>
                   </button>
-                  <button onClick={() => runCommand('reboot')} className="flex items-center gap-3 bg-slate-800 hover:bg-slate-700 p-4 rounded-xl transition-all active:scale-95">
+                  <button
+                    onClick={() => runCommand('reboot')}
+                    disabled={systemCapabilities && !systemCapabilities.canReboot}
+                    className="flex items-center gap-3 bg-slate-800 hover:bg-slate-700 p-4 rounded-xl transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
                     <RefreshCcw size={18} className="text-blue-500" />
                     <div className="text-left">
                       <div className="font-semibold">Reboot Mirror</div>
-                      <div className="text-xs text-slate-500">Full system reboot</div>
+                      <div className="text-xs text-slate-500">
+                        {systemCapabilities && !systemCapabilities.canReboot
+                          ? 'Only available on supported production hardware'
+                          : 'Full system reboot'}
+                      </div>
                     </div>
                   </button>
                 </div>
@@ -2210,6 +2590,22 @@ function App() {
                           />
                         </div>
                         <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Nickname</label>
+                          <input
+                            type="text"
+                            value={member.nickname || ''}
+                            onChange={(event) => updateHousehold((draft) => {
+                              const target = draft.members.find((entry) => entry.id === member.id);
+                              target.nickname = event.target.value;
+                              return draft;
+                            })}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
                           <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Birthdate</label>
                           <input
                             type="date"
@@ -2222,6 +2618,21 @@ function App() {
                             className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
                           />
                         </div>
+                        <label className="flex items-center justify-between gap-3 p-3 bg-slate-800/30 rounded-xl border border-slate-800">
+                          <div>
+                            <div className="text-sm font-semibold text-white">Allow age reveal</div>
+                            <div className="text-[10px] text-slate-500 uppercase font-bold">Used for birthday overlays and messages</div>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={member.allowAgeReveal === true}
+                            onChange={(event) => updateHousehold((draft) => {
+                              const target = draft.members.find((entry) => entry.id === member.id);
+                              target.allowAgeReveal = event.target.checked;
+                              return draft;
+                            })}
+                          />
+                        </label>
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2277,11 +2688,11 @@ function App() {
 
                       <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Linked Calendars</label>
-                        {googleCalendars.length === 0 ? (
-                          <div className="text-sm text-slate-500">Open the Integrations or Household tab after connecting Google to link calendars.</div>
+                        {availableCalendars.length === 0 ? (
+                          <div className="text-sm text-slate-500">Connect Google, ICS, or CalDAV sources to link calendars to this household member.</div>
                         ) : (
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            {googleCalendars.map((calendar) => (
+                            {availableCalendars.map((calendar) => (
                               <label key={`${member.id}-${calendar.id}`} className="flex items-center justify-between gap-3 p-3 rounded-xl border border-slate-800 bg-slate-900/70">
                                 <div>
                                   <div className="font-medium text-white">{calendar.summary}</div>
@@ -2819,7 +3230,7 @@ function App() {
                 <div className="space-y-6">
                   <div>
                     <div className="flex justify-between mb-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Font Scaling</label>
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Mirror Text Size</label>
                       <span className="text-[#ff8bbf] font-bold">{config.theme.fontSizeBase}px</span>
                     </div>
                     <input
@@ -2830,6 +3241,9 @@ function App() {
                       onChange={(event) => updateTheme('fontSizeBase', parseInt(event.target.value, 10))}
                       className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-600"
                     />
+                    <div className="mt-2 text-xs text-slate-500">
+                      This affects the mirror display typography base size. Module-specific typography controls can be investigated in v2.
+                    </div>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Font Family</label>
@@ -2843,6 +3257,19 @@ function App() {
                       <option value="Open Sans">Open Sans</option>
                       <option value="Montserrat">Montserrat</option>
                     </select>
+                  </div>
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
+                    <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Mirror Preview</div>
+                    <div className="mt-4 space-y-3" style={{ fontFamily: config.theme.fontFamily }}>
+                      <div className="text-4xl font-bold text-white" style={{ fontSize: `${config.theme.fontSizeBase * 2.4}px` }}>08:42</div>
+                      <div className="text-lg font-semibold text-[#ffb28f]" style={{ fontSize: `${config.theme.fontSizeBase * 1.2}px` }}>Daily Brief</div>
+                      <div className="text-slate-300" style={{ fontSize: `${config.theme.fontSizeBase}px` }}>
+                        Yamaha by car is about 28 min from home.
+                      </div>
+                      <div className="text-slate-500" style={{ fontSize: `${Math.max(10, config.theme.fontSizeBase * 0.8)}px` }}>
+                        Updated 08:30
+                      </div>
+                    </div>
                   </div>
                 </div>
               </section>
@@ -2981,6 +3408,136 @@ function App() {
                           </button>
                         </div>
                       )}
+                    </section>
+                  </div>
+                )}
+
+                {activeIntegrationSection === 'calendar_sources' && (
+                  <div className="space-y-6">
+                    <section className="bg-slate-900/50 border border-slate-800 rounded-[28px] p-6">
+                      <div className="flex items-center justify-between gap-4 mb-6">
+                        <div>
+                          <h2 className="text-lg font-semibold text-white">Additional Calendar Sources</h2>
+                          <div className="text-sm text-slate-500">Add ICS subscription feeds and CalDAV accounts. All synced calendars flow into the same mirror and Daily Brief pipeline.</div>
+                        </div>
+                        <div className="flex gap-3">
+                          <button onClick={() => addCalendarSource('ics')} className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700">
+                            Add ICS
+                          </button>
+                          <button onClick={() => addCalendarSource('caldav')} className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700">
+                            Add CalDAV
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        {calendarSources.length === 0 && (
+                          <div className="rounded-xl border border-dashed border-slate-800 p-6 text-sm text-slate-500">
+                            No additional sources configured yet.
+                          </div>
+                        )}
+
+                        {calendarSources.map((source, index) => (
+                          <div key={source.id} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 space-y-4">
+                            <div className="flex items-center justify-between gap-4">
+                              <div>
+                                <div className="text-white font-semibold">{source.type === 'caldav' ? 'CalDAV account' : 'ICS feed'} #{index + 1}</div>
+                                <div className="text-xs text-slate-500">Credentials are stored securely on the mirror.</div>
+                              </div>
+                              <button onClick={() => removeCalendarSource(source.id)} className="text-slate-500 hover:text-red-400 transition-colors">
+                                <Trash2 size={18} />
+                              </button>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Name</label>
+                                <input
+                                  type="text"
+                                  value={source.name || ''}
+                                  onChange={(event) => updateCalendarSource(source.id, { name: event.target.value })}
+                                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                />
+                              </div>
+                              <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+                                <div>
+                                  <div className="text-sm font-semibold text-white">Enabled</div>
+                                  <div className="text-xs text-slate-500">Include this source in sync and Daily Brief processing.</div>
+                                </div>
+                                <input
+                                  type="checkbox"
+                                  checked={source.enabled !== false}
+                                  onChange={(event) => updateCalendarSource(source.id, { enabled: event.target.checked })}
+                                />
+                              </label>
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">URL</label>
+                              <input
+                                type="text"
+                                value={source.url || ''}
+                                onChange={(event) => updateCalendarSource(source.id, { url: event.target.value })}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                placeholder={source.type === 'caldav' ? 'https://calendar.example.com/dav/' : 'https://example.com/calendar.ics'}
+                              />
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                              <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Username</label>
+                                <input
+                                  type="text"
+                                  value={source.username || ''}
+                                  onChange={(event) => updateCalendarSource(source.id, { username: event.target.value })}
+                                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Password</label>
+                                <input
+                                  type="password"
+                                  value={source.password || ''}
+                                  placeholder={source.passwordConfigured ? 'Stored securely. Enter to replace.' : 'Optional'}
+                                  onChange={(event) => updateCalendarSource(source.id, { password: event.target.value })}
+                                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Color</label>
+                                <input
+                                  type="color"
+                                  value={source.color || '#f472b6'}
+                                  onChange={(event) => updateCalendarSource(source.id, { color: event.target.value })}
+                                  className="h-12 w-full rounded-xl border border-slate-700 bg-slate-800 p-2"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <button onClick={saveCalendarSources} className="mt-6 w-full rounded-xl bg-gradient-to-r from-[#ff86d3] via-[#ff8ea8] to-[#ffb28f] px-4 py-3 font-semibold text-slate-950 transition-all hover:brightness-105">
+                        Save Calendar Sources
+                      </button>
+                    </section>
+
+                    <section className="bg-slate-900/50 border border-slate-800 rounded-[28px] p-6">
+                      <h2 className="text-lg font-semibold text-white mb-4">Synced Calendars</h2>
+                      <div className="grid gap-3">
+                        {availableCalendars.length === 0 && (
+                          <div className="text-sm text-slate-500">No calendars synced yet.</div>
+                        )}
+                        {availableCalendars.map((calendar) => (
+                          <div key={`available-${calendar.id}`} className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                            <div className="h-10 w-3 rounded-full" style={{ backgroundColor: calendar.backgroundColor || '#f472b6' }} />
+                            <div className="min-w-0">
+                              <div className="font-medium text-white truncate">{calendar.summary}</div>
+                              <div className="text-xs text-slate-500">{calendar.sourceType || calendar.accessRole || 'calendar source'}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </section>
                   </div>
                 )}
@@ -3197,16 +3754,16 @@ function App() {
                           </div>
 
                           {dailyBriefCalendarMode !== 'all_selected' && (
-                            googleCalendars.length === 0 ? (
+                            availableCalendars.length === 0 ? (
                               <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-400">
-                                Connect Google first to choose which calendars may create Daily Brief cards.
+                                Connect Google, ICS, or CalDAV sources to choose which calendars may create Daily Brief cards.
                               </div>
                             ) : (
                               <div className="space-y-2">
                                 <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                                   {dailyBriefCalendarMode === 'include_selected' ? 'Calendars Allowed In Daily Brief' : 'Calendars Excluded From Daily Brief'}
                                 </div>
-                                {googleCalendars.map((calendar) => {
+                                {availableCalendars.map((calendar) => {
                                   const checked = dailyBriefScopedCalendarIds.includes(calendar.id);
                                   const actionLabel = dailyBriefCalendarMode === 'include_selected' ? 'Allow' : 'Exclude';
                                   return (
@@ -3376,156 +3933,435 @@ function App() {
                   </section>
                 )}
 
-                {activeIntegrationSection === 'transport' && (
+                {activeIntegrationSection === 'travel' && (
                   <section className="bg-slate-900/50 border border-slate-800 rounded-[28px] p-6">
-                    <div className="flex items-center gap-3 mb-6">
-                      <Cloud size={24} className="text-amber-400" />
-                      <h2 className="text-lg font-semibold text-white">Transport Enrichment</h2>
-                    </div>
                     <div className="space-y-4">
                       <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-800/30 p-3">
                         <div>
-                          <div className="text-sm font-semibold text-white">Enable transport lookups</div>
-                          <div className="text-[10px] font-bold uppercase text-slate-500">Deterministic parsing stays active regardless</div>
+                          <div className="text-sm font-semibold text-white">Enable Travel integration</div>
+                          <div className="text-[10px] font-bold uppercase text-slate-500">Flights, route estimates, and travel anchors for Daily Brief and Travel Time cards</div>
                         </div>
                         <input
                           type="checkbox"
-                          checked={transportConfig.enabled}
-                          onChange={(event) => updateServiceConfig('transport', 'enabled', event.target.checked)}
+                          checked={travelConfig.enabled !== false}
+                          onChange={(event) => updateServiceConfig('travel', 'enabled', event.target.checked)}
                         />
                       </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider</label>
-                        <select
-                          value={transportConfig.provider}
-                          onChange={(event) => updateServiceConfig('transport', 'provider', event.target.value)}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                        >
-                          <option value="none">None</option>
-                          <option value="aviationstack">Aviationstack</option>
-                          <option value="aviationapi">AviationAPI</option>
-                          <option value="custom">Custom</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider API Key</label>
-                        <input
-                          type="password"
-                          placeholder={transportConfig.apiKeyConfigured ? 'Stored securely. Enter to replace.' : 'Paste provider API key'}
-                          value={transportConfig.apiKey || ''}
-                          onChange={(event) => updateServiceConfig('transport', 'apiKey', event.target.value)}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                        />
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Home Airport</label>
-                          <input
-                            type="text"
-                            placeholder="HAM"
-                            value={transportConfig.homeAirport || ''}
-                            onChange={(event) => updateServiceConfig('transport', 'homeAirport', event.target.value.toUpperCase())}
-                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                          />
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
+                          <div>
+                            <div className="text-sm font-semibold text-white">Flight and station enrichment</div>
+                            <div className="text-xs text-slate-500 mt-1">Used for trips, returns, and station-aware travel summaries.</div>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Flight provider</label>
+                            <select
+                              value={travelConfig.transportProvider || 'none'}
+                              onChange={(event) => updateServiceConfig('travel', 'transportProvider', event.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                            >
+                              <option value="none">None</option>
+                              <option value="aviationstack">Aviationstack</option>
+                              <option value="aviationapi">AviationAPI</option>
+                              <option value="custom">Custom</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Transport API Key</label>
+                            <input
+                              type="password"
+                              placeholder={travelConfig.transportApiKeyConfigured ? 'Stored securely. Enter to replace.' : 'Paste provider API key'}
+                              value={travelConfig.transportApiKey || ''}
+                              onChange={(event) => updateServiceConfig('travel', 'transportApiKey', event.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                            />
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Home Airport</label>
+                              <input
+                                type="text"
+                                value={travelConfig.homeAirport || ''}
+                                onChange={(event) => updateServiceConfig('travel', 'homeAirport', event.target.value)}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Closest Train Station</label>
+                              <input
+                                type="text"
+                                value={travelConfig.closestTrainStation || ''}
+                                onChange={(event) => updateServiceConfig('travel', 'closestTrainStation', event.target.value)}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Closest Bus Station</label>
+                              <input
+                                type="text"
+                                value={travelConfig.closestBusStation || ''}
+                                onChange={(event) => updateServiceConfig('travel', 'closestBusStation', event.target.value)}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Closest Tube Station</label>
+                              <input
+                                type="text"
+                                value={travelConfig.closestTubeStation || ''}
+                                onChange={(event) => updateServiceConfig('travel', 'closestTubeStation', event.target.value)}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                              />
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Home Station</label>
-                          <input
-                            type="text"
-                            placeholder="Hamburg Hbf"
-                            value={transportConfig.homeStation || ''}
-                            onChange={(event) => updateServiceConfig('transport', 'homeStation', event.target.value)}
-                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Refresh Minutes</label>
-                        <input
-                          type="number"
-                          min="5"
-                          max="120"
-                          value={transportConfig.refreshMinutes}
-                          onChange={(event) => updateServiceConfig('transport', 'refreshMinutes', parseInt(event.target.value || '30', 10))}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                        />
-                      </div>
-                    </div>
-                  </section>
-                )}
 
-                {activeIntegrationSection === 'routing' && (
-                  <section className="bg-slate-900/50 border border-slate-800 rounded-[28px] p-6">
-                    <div className="flex items-center gap-3 mb-6">
-                      <Cloud size={24} className="text-cyan-400" />
-                      <h2 className="text-lg font-semibold text-white">Routing & Travel Time</h2>
-                    </div>
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-800/30 p-3">
-                        <div>
-                          <div className="text-sm font-semibold text-white">Enable route estimates</div>
-                          <div className="text-[10px] font-bold uppercase text-slate-500">Falls back to local estimates if no provider is configured</div>
+                        <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
+                          <div>
+                            <div className="text-sm font-semibold text-white">Routing and traffic</div>
+                            <div className="text-xs text-slate-500 mt-1">Used by commute context and Travel Time route cards.</div>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Base Routing Provider</label>
+                            <select
+                              value={travelConfig.routingProvider || 'none'}
+                              onChange={(event) => updateServiceConfig('travel', 'routingProvider', event.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                            >
+                              <option value="none">None</option>
+                              <option value="openrouteservice">OpenRouteService</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">OpenRouteService Base URL</label>
+                            <input
+                              type="text"
+                              name="travel-routing-base-url"
+                              autoComplete="off"
+                              autoCorrect="off"
+                              autoCapitalize="none"
+                              spellCheck={false}
+                              placeholder="Optional. Leave empty for OpenRouteService cloud."
+                              value={travelConfig.routingBaseUrl || ''}
+                              onChange={(event) => updateServiceConfig('travel', 'routingBaseUrl', event.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                            />
+                            <div className="mt-2 text-xs text-slate-500">
+                              For OpenRouteService, leave this empty unless you run your own proxy or an alternate API endpoint. The default is `https://api.openrouteservice.org`.
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">OpenRouteService API Key</label>
+                            <input
+                              type="password"
+                              placeholder={travelConfig.routingApiKeyConfigured ? 'Stored securely. Enter to replace.' : 'Paste provider API key'}
+                              value={travelConfig.routingApiKey || ''}
+                              onChange={(event) => updateServiceConfig('travel', 'routingApiKey', event.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                            />
+                          </div>
+                          <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+                            <div>
+                              <div className="text-sm font-semibold text-white">Enable Google Routes</div>
+                              <div className="text-xs text-slate-500">Use Google Routes for traffic-aware driving and real public transport routes.</div>
+                            </div>
+                            <input
+                              type="checkbox"
+                              checked={travelConfig.googleRoutesEnabled === true}
+                              onChange={(event) => updateServiceConfig('travel', 'googleRoutesEnabled', event.target.checked)}
+                            />
+                          </label>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Google Routes API Key</label>
+                            <input
+                              type="password"
+                              placeholder={travelConfig.googleRoutesApiKeyConfigured ? 'Stored securely. Enter to replace.' : 'Paste Google Maps API key'}
+                              value={travelConfig.googleRoutesApiKey || ''}
+                              onChange={(event) => updateServiceConfig('travel', 'googleRoutesApiKey', event.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                            />
+                          </div>
+                          <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+                            <div>
+                              <div className="text-sm font-semibold text-white">Use Google Routes for all modes</div>
+                              <div className="text-xs text-slate-500">When off, Google handles car and public transport only. Bike and walk stay on the base routing provider.</div>
+                            </div>
+                            <input
+                              type="checkbox"
+                              checked={travelConfig.googleRoutesForAllModes === true}
+                              onChange={(event) => updateServiceConfig('travel', 'googleRoutesForAllModes', event.target.checked)}
+                            />
+                          </label>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Default Car Profile</label>
+                              <select
+                                value={travelConfig.routingProfile || 'driving-car'}
+                                onChange={(event) => updateServiceConfig('travel', 'routingProfile', event.target.value)}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                              >
+                                <option value="driving-car">Driving</option>
+                                <option value="cycling-regular">Cycling</option>
+                                <option value="foot-walking">Walking</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Refresh Minutes</label>
+                              <input
+                                type="number"
+                                min="5"
+                                max="120"
+                                value={travelConfig.refreshMinutes || 30}
+                                onChange={(event) => updateServiceConfig('travel', 'refreshMinutes', parseInt(event.target.value || '30', 10))}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                              />
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-xs text-slate-400">
+                            With Google Routes enabled, Mirrorial uses Google for car and public transport and can use live traffic for driving. OpenRouteService remains the base provider for bike and walk unless you enable the all-modes toggle.
+                          </div>
                         </div>
-                        <input
-                          type="checkbox"
-                          checked={routingConfig.enabled}
-                          onChange={(event) => updateServiceConfig('routing', 'enabled', event.target.checked)}
-                        />
                       </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider</label>
-                        <select
-                          value={routingConfig.provider}
-                          onChange={(event) => updateServiceConfig('routing', 'provider', event.target.value)}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                        >
-                          <option value="none">None</option>
-                          <option value="openrouteservice">OpenRouteService</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Base URL</label>
-                        <input
-                          type="text"
-                          placeholder="Optional. Defaults to https://api.openrouteservice.org"
-                          value={routingConfig.baseUrl || ''}
-                          onChange={(event) => updateServiceConfig('routing', 'baseUrl', event.target.value)}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">API Key</label>
-                        <input
-                          type="password"
-                          placeholder={routingConfig.apiKeyConfigured ? 'Stored securely. Enter to replace.' : 'Paste provider API key'}
-                          value={routingConfig.apiKey || ''}
-                          onChange={(event) => updateServiceConfig('routing', 'apiKey', event.target.value)}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                        />
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Profile</label>
-                          <select
-                            value={routingConfig.profile || 'driving-car'}
-                            onChange={(event) => updateServiceConfig('routing', 'profile', event.target.value)}
-                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+
+                      <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 space-y-4">
+                        <div className="flex items-center justify-between gap-4">
+                          <div>
+                            <div className="text-sm font-semibold text-white">Travel Time route cards</div>
+                            <div className="text-xs text-slate-500 mt-1">These routes are shared by every Travel Time module, including Travel Time cards inside the auto-rotating module.</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={addTravelRouteItem}
+                            className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-semibold text-white transition-all hover:border-[#ff8bbf] hover:bg-slate-700"
                           >
-                            <option value="driving-car">Driving</option>
-                            <option value="cycling-regular">Cycling</option>
-                            <option value="foot-walking">Walking</option>
-                          </select>
+                            Add Travel Route
+                          </button>
                         </div>
-                        <div>
-                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Refresh Minutes</label>
-                          <input
-                            type="number"
-                            min="5"
-                            max="120"
-                            value={routingConfig.refreshMinutes}
-                            onChange={(event) => updateServiceConfig('routing', 'refreshMinutes', parseInt(event.target.value || '30', 10))}
-                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                          />
+
+                        {(travelTimeModuleConfig.items || []).length === 0 && (
+                          <div className="rounded-xl border border-dashed border-slate-800 p-6 text-sm text-slate-500">
+                            No travel routes configured yet. Add route cards here, then place a Travel Time module anywhere in the layout or inside an auto-rotating module.
+                          </div>
+                        )}
+
+                        {travelConfig.googleRoutesEnabled !== true && travelConfig.routingProvider === 'openrouteservice' && (
+                          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+                            OpenRouteService is currently suitable for car, bike, and walk estimates here. It does not provide a real public-transport route for Mirrorial, and the current integration does not use live traffic data.
+                          </div>
+                        )}
+
+                        <div className="space-y-3">
+                          {(travelTimeModuleConfig.items || []).map((item, index) => (
+                            <div key={item.id} className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 space-y-3">
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Route {index + 1}</div>
+                                  <div className="mt-1 text-sm font-semibold text-white">{item.label || item.destinationLabel || 'Untitled route'}</div>
+                                </div>
+                                <button onClick={() => removeTravelRouteItem(item.id)} className="text-slate-500 transition-colors hover:text-red-400">
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                              <div className="grid grid-cols-1 gap-3">
+                                <input
+                                  type="text"
+                                  placeholder="Card label"
+                                  value={item.label || ''}
+                                  onChange={(event) => updateTravelRouteItem(item.id, { label: event.target.value })}
+                                  className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+                                />
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                  <select
+                                    value={item.originType || 'home'}
+                                    onChange={(event) => updateTravelRouteItem(item.id, { originType: event.target.value })}
+                                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+                                  >
+                                    <option value="home">Home</option>
+                                    <option value="custom">Custom origin</option>
+                                    <option value="home_airport">Home airport</option>
+                                    <option value="closest_train_station">Closest train station</option>
+                                    <option value="closest_bus_station">Closest bus station</option>
+                                    <option value="closest_tube_station">Closest tube station</option>
+                                  </select>
+                                  <select
+                                    value={item.mode || 'car'}
+                                    onChange={(event) => updateTravelRouteItem(item.id, { mode: event.target.value })}
+                                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+                                  >
+                                    <option value="car">Car</option>
+                                    <option value="bike">Bike</option>
+                                    <option value="walk">Walk</option>
+                                    <option value="public_transport">
+                                      {travelConfig.googleRoutesEnabled !== true
+                                        ? 'Public transport (needs Google Routes)'
+                                        : 'Public transport'}
+                                    </option>
+                                  </select>
+                                </div>
+                                {item.originType === 'custom' && (
+                                  <input
+                                    type="text"
+                                    placeholder="Custom origin address"
+                                    value={item.originAddress || ''}
+                                    onChange={(event) => updateTravelRouteItem(item.id, { originAddress: event.target.value, originLabel: event.target.value })}
+                                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+                                  />
+                                )}
+                                <input
+                                  type="text"
+                                  placeholder="Destination label"
+                                  value={item.destinationLabel || ''}
+                                  onChange={(event) => updateTravelRouteItem(item.id, { destinationLabel: event.target.value })}
+                                  className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+                                />
+                                <input
+                                  type="text"
+                                  placeholder="Destination address"
+                                  value={item.destinationAddress || ''}
+                                  onChange={(event) => updateTravelRouteItem(item.id, { destinationAddress: event.target.value, destinationType: 'custom' })}
+                                  className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm outline-none transition-all focus:ring-2 focus:ring-[#ff8bbf]"
+                                />
+                                <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                                  <div>
+                                    <div className="text-sm font-semibold text-white">Enabled</div>
+                                    <div className="text-xs text-slate-500">Show this route card on the mirror.</div>
+                                  </div>
+                                  <input
+                                    type="checkbox"
+                                    checked={item.enabled !== false}
+                                    onChange={(event) => updateTravelRouteItem(item.id, { enabled: event.target.checked })}
+                                  />
+                                </label>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 space-y-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                          <div>
+                            <div className="text-sm font-semibold text-white">Travel Time debug</div>
+                            <div className="text-xs text-slate-500 mt-1">Run the same route calculation the mirror uses and inspect what the backend resolved for each origin and destination.</div>
+                          </div>
+                          <div className="flex gap-3">
+                            <button
+                              type="button"
+                              onClick={refreshTravelTimeDebug}
+                              disabled={travelTimeDebugLoading}
+                              className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-semibold text-white transition-all hover:bg-slate-700 disabled:opacity-60"
+                            >
+                              Refresh Debug
+                            </button>
+                            <button
+                              type="button"
+                              onClick={runTravelTimeDebug}
+                              disabled={travelTimeDebugLoading}
+                              className="rounded-xl bg-gradient-to-r from-[#ff86d3] via-[#ff8ea8] to-[#ffb28f] px-4 py-3 text-sm font-semibold text-slate-950 transition-all hover:brightness-105 disabled:opacity-60"
+                            >
+                              {travelTimeDebugLoading ? 'Running...' : 'Run Travel Debug'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {travelTimeDebug?.updatedAt && (
+                          <div className="text-xs text-slate-500">
+                            Last run: {new Date(travelTimeDebug.updatedAt).toLocaleString()}
+                          </div>
+                        )}
+
+                        {travelTimeDebug?.config && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
+                            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Base Provider</div>
+                              <div className="mt-1 text-sm font-semibold text-white">{travelTimeDebug.config.routingProvider || 'none'}</div>
+                            </div>
+                            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Routing Base URL</div>
+                              <div className="mt-1 text-sm font-semibold text-white break-all">{travelTimeDebug.config.routingBaseUrl || 'default'}</div>
+                            </div>
+                            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Routing Profile</div>
+                              <div className="mt-1 text-sm font-semibold text-white">{travelTimeDebug.config.routingProfile || 'driving-car'}</div>
+                            </div>
+                            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">API Key</div>
+                              <div className="mt-1 text-sm font-semibold text-white">{travelTimeDebug.config.routingApiKeyConfigured ? 'Configured' : 'Missing'}</div>
+                            </div>
+                            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Google Routes</div>
+                              <div className="mt-1 text-sm font-semibold text-white">{travelTimeDebug.config.googleRoutesEnabled ? 'Enabled' : 'Off'}</div>
+                            </div>
+                            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Google API Key</div>
+                              <div className="mt-1 text-sm font-semibold text-white">{travelTimeDebug.config.googleRoutesApiKeyConfigured ? 'Configured' : 'Missing'}</div>
+                            </div>
+                            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Google All Modes</div>
+                              <div className="mt-1 text-sm font-semibold text-white">{travelTimeDebug.config.googleRoutesForAllModes ? 'On' : 'Off'}</div>
+                            </div>
+                          </div>
+                        )}
+
+                        {!travelTimeDebugLoading && (!travelTimeDebug?.items || travelTimeDebug.items.length === 0) && (
+                          <div className="rounded-xl border border-dashed border-slate-800 p-6 text-sm text-slate-500">
+                            No Travel Time debug data yet. Run Travel Debug after saving your route settings.
+                          </div>
+                        )}
+
+                        <div className="space-y-3">
+                          {(travelTimeDebug?.items || []).map((item) => (
+                            <div key={`travel-debug-${item.id}`} className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 space-y-3">
+                              <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                                <div>
+                                  <div className="text-sm font-semibold text-white">{item.label || 'Route'}</div>
+                                  <div className="text-xs text-slate-500">Status: {item.status || 'unknown'}</div>
+                                </div>
+                                <div className="text-xs text-slate-400">{item.summary || 'No summary returned.'}</div>
+                              </div>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                                <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 space-y-1">
+                                  <div className="font-bold uppercase tracking-wider text-slate-500">Origin</div>
+                                  <div className="text-slate-300">Type: {item.input?.originType || 'home'}</div>
+                                  <div className="text-slate-300 break-words">Address: {item.origin?.address || item.input?.originAddress || 'n/a'}</div>
+                                  <div className={item.origin?.hasLocation ? 'text-emerald-300' : 'text-amber-300'}>
+                                    {item.origin?.hasLocation ? 'Geocoded successfully' : 'No resolved coordinates'}
+                                  </div>
+                                  {item.origin?.geocode?.provider && (
+                                    <div className="text-slate-400">Provider: {item.origin.geocode.provider}{item.origin.geocode.fromCache ? ' (cache)' : ''}</div>
+                                  )}
+                                  {item.origin?.geocode?.error && (
+                                    <div className="text-amber-300 break-words">Error: {item.origin.geocode.error}</div>
+                                  )}
+                                  {item.origin?.location?.resolvedLabel && (
+                                    <div className="text-slate-400 break-words">{item.origin.location.resolvedLabel}</div>
+                                  )}
+                                </div>
+                                <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 space-y-1">
+                                  <div className="font-bold uppercase tracking-wider text-slate-500">Destination</div>
+                                  <div className="text-slate-300">Type: {item.input?.destinationType || 'custom'}</div>
+                                  <div className="text-slate-300 break-words">Address: {item.destination?.address || item.input?.destinationAddress || 'n/a'}</div>
+                                  <div className={item.destination?.hasLocation ? 'text-emerald-300' : 'text-amber-300'}>
+                                    {item.destination?.hasLocation ? 'Geocoded successfully' : 'No resolved coordinates'}
+                                  </div>
+                                  {item.destination?.geocode?.provider && (
+                                    <div className="text-slate-400">Provider: {item.destination.geocode.provider}{item.destination.geocode.fromCache ? ' (cache)' : ''}</div>
+                                  )}
+                                  {item.destination?.geocode?.error && (
+                                    <div className="text-amber-300 break-words">Error: {item.destination.geocode.error}</div>
+                                  )}
+                                  {item.destination?.location?.resolvedLabel && (
+                                    <div className="text-slate-400 break-words">{item.destination.location.resolvedLabel}</div>
+                                  )}
+                                </div>
+                              </div>
+                              {item.route && (
+                                <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-xs text-slate-300">
+                                  Source: {item.route.source || 'unknown'} | Profile: {item.route.profile || 'n/a'} | Duration: {item.route.durationMinutes ?? 'n/a'} min | Distance: {item.route.distanceKm ?? 'n/a'} km | Traffic: {item.route.trafficSeverity || 'neutral'}{item.route.trafficDelayMinutes != null ? ` (${item.route.trafficDelayMinutes} min delay)` : ''}
+                                </div>
+                              )}
+                            </div>
+                          ))}
                         </div>
                       </div>
                     </div>
@@ -3967,7 +4803,7 @@ function App() {
             </main>
 
             <footer className="rounded-[28px] border border-slate-800 bg-slate-900/60 px-6 py-4 text-sm text-slate-400">
-              {currentYear} Christoph Seiler | Flaming Battenberg
+              Mirrorial v{APP_VERSION} | {currentYear} Christoph Seiler | Flaming Battenberg
             </footer>
           </div>
         </div>

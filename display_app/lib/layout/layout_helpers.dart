@@ -6,6 +6,7 @@ const Set<String> _rotatorChildTypes = {
   'home_assistant',
   'calendar',
   'daily_brief',
+  'travel_time',
 };
 
 Map<String, dynamic> _normalizeRotatorChildModule(Map<String, dynamic>? module, {int index = 0}) {

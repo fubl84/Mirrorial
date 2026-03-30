@@ -617,6 +617,22 @@ class _WeatherGlyph extends StatelessWidget {
     );
   }
 
+  Widget _outlinedIcon(IconData icon, double iconSize, Color fill, {Color outline = Colors.white, double outlineBlur = 10}) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Icon(icon, size: iconSize + 6, color: outline.withValues(alpha: 0.9)),
+        Icon(icon, size: iconSize + 2, color: Colors.black.withValues(alpha: 0.25)),
+        Icon(icon, size: iconSize, color: fill, shadows: [
+          Shadow(
+            color: outline.withValues(alpha: 0.35),
+            blurRadius: outlineBlur,
+          ),
+        ]),
+      ],
+    );
+  }
+
   List<Widget> _buildClear(Color accent) {
     final rayScale = 0.96 + (0.04 * math.sin(progress * math.pi * 2));
     final glowOpacity = 0.14 + (0.04 * math.sin(progress * math.pi * 2));
@@ -670,13 +686,13 @@ class _WeatherGlyph extends StatelessWidget {
         top: size * 0.02,
         child: Transform.scale(
           scale: 0.95 + (0.08 * math.sin(progress * math.pi * 2)),
-          child: Icon(Icons.wb_sunny_rounded, size: size * 0.54, color: const Color(0xFFFBBF24)),
+          child: _outlinedIcon(Icons.wb_sunny_rounded, size * 0.54, const Color(0xFFFBBF24)),
         ),
       ),
       Positioned(
         left: size * 0.14 + (math.sin(progress * math.pi * 2) * 2),
         top: size * 0.24,
-        child: Icon(Icons.cloud_rounded, size: size * 0.74, color: Colors.white.withValues(alpha: 0.88)),
+        child: _outlinedIcon(Icons.cloud_rounded, size * 0.74, Colors.white.withValues(alpha: 0.88)),
       ),
     ];
   }
@@ -686,35 +702,41 @@ class _WeatherGlyph extends StatelessWidget {
       Positioned(
         left: size * 0.04 + (math.sin(progress * math.pi * 2) * 2.5),
         top: size * 0.18,
-        child: Icon(Icons.cloud_rounded, size: size * 0.76, color: Colors.white.withValues(alpha: 0.82)),
+        child: _outlinedIcon(Icons.cloud_rounded, size * 0.76, Colors.white.withValues(alpha: 0.82)),
       ),
       Positioned(
         left: size * 0.18 - (math.sin(progress * math.pi * 2) * 2),
         top: size * 0.28,
-        child: Icon(Icons.cloud_rounded, size: size * 0.58, color: Colors.white.withValues(alpha: 0.58)),
+        child: _outlinedIcon(Icons.cloud_rounded, size * 0.58, Colors.white.withValues(alpha: 0.58)),
       ),
     ];
   }
 
   List<Widget> _buildRain(Color accent) {
-    final offset = (progress * size * 0.18) % (size * 0.18);
+    final cloud = _outlinedIcon(Icons.cloud_rounded, size * 0.76, Colors.white.withValues(alpha: 0.84));
 
     return [
       Positioned(
         top: size * 0.12,
-        child: Icon(Icons.cloud_rounded, size: size * 0.76, color: Colors.white.withValues(alpha: 0.84)),
+        child: cloud,
       ),
-      ...List.generate(3, (index) {
-        final leftBase = size * (0.26 + (index * 0.16));
+      ...List.generate(4, (index) {
+        final localProgress = (progress + (index * 0.17)) % 1.0;
+        final offset = (localProgress * size * 0.28) % (size * 0.28);
+        final leftBase = size * (0.2 + (index * 0.14));
         return Positioned(
-          left: leftBase,
-          top: size * 0.58 + offset,
-          child: Container(
-            width: size * 0.05,
-            height: size * 0.14,
-            decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.9),
-              borderRadius: BorderRadius.circular(99),
+          left: leftBase + (index.isEven ? -2 : 2),
+          top: size * 0.54 + offset,
+          child: Transform.rotate(
+            angle: index.isEven ? 0.08 : -0.08,
+            child: Container(
+              width: size * 0.045,
+              height: size * (0.12 + ((index % 2) * 0.03)),
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.95),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.55), width: 1),
+                borderRadius: BorderRadius.circular(99),
+              ),
             ),
           ),
         );
@@ -723,37 +745,39 @@ class _WeatherGlyph extends StatelessWidget {
   }
 
   List<Widget> _buildSnow(Color accent) {
-    final drift = math.sin(progress * math.pi * 2) * 3;
+    final cloud = _outlinedIcon(Icons.cloud_rounded, size * 0.76, Colors.white.withValues(alpha: 0.84));
 
     return [
       Positioned(
         top: size * 0.12,
-        child: Icon(Icons.cloud_rounded, size: size * 0.76, color: Colors.white.withValues(alpha: 0.84)),
+        child: cloud,
       ),
-      ...List.generate(3, (index) {
-        final topBase = size * (0.62 + (index.isEven ? 0 : 0.06));
+      ...List.generate(4, (index) {
+        final localProgress = (progress + (index * 0.19)) % 1.0;
+        final drift = math.sin((localProgress * math.pi * 2) + index) * 5;
+        final topBase = size * (0.58 + (localProgress * 0.2));
         return Positioned(
           left: size * (0.24 + (index * 0.18)) + drift,
           top: topBase,
-          child: Icon(Icons.circle, size: size * 0.07, color: Colors.white.withValues(alpha: 0.92)),
+          child: Icon(Icons.ac_unit_rounded, size: size * 0.11, color: Colors.white.withValues(alpha: 0.94)),
         );
       }),
     ];
   }
 
   List<Widget> _buildStorm(Color accent) {
-    final flash = progress > 0.82 ? 1.0 : 0.0;
+    final flash = progress > 0.82 ? 1.0 : (progress > 0.46 && progress < 0.5 ? 0.65 : 0.0);
 
     return [
       Positioned(
         top: size * 0.1,
-        child: Icon(Icons.cloud_rounded, size: size * 0.76, color: Colors.white.withValues(alpha: 0.84)),
+        child: _outlinedIcon(Icons.cloud_rounded, size * 0.76, Colors.white.withValues(alpha: 0.84)),
       ),
       Positioned(
-        top: size * 0.44,
+        top: size * 0.42,
         child: Opacity(
           opacity: 0.75 + (flash * 0.25),
-          child: Icon(Icons.bolt_rounded, size: size * 0.34, color: const Color(0xFFFDE047)),
+          child: _outlinedIcon(Icons.bolt_rounded, size * 0.34, const Color(0xFFFDE047), outline: Colors.white, outlineBlur: 18),
         ),
       ),
     ];

@@ -1,17 +1,28 @@
 #!/bin/bash
 
 # Mirrorial - Service Registration Script
-set -e
+set -euo pipefail
 
 # Detect absolute path of the project root
-PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+PROJECT_ROOT=${PROJECT_ROOT_OVERRIDE:-$(cd "$(dirname "$0")/.." && pwd)}
 # Detect the actual user who invoked sudo (if applicable)
-ACTUAL_USER=${SUDO_USER:-$(whoami)}
+ACTUAL_USER=${SERVICE_USER:-${SUDO_USER:-$(whoami)}}
 # Detect node path
-NODE_PATH=$(which node)
+NODE_PATH=$(command -v node)
+USER_HOME=$(getent passwd "$ACTUAL_USER" | cut -d: -f6)
+
+if [ -z "$USER_HOME" ]; then
+    echo "❌ Error: Could not resolve the home directory for $ACTUAL_USER."
+    exit 1
+fi
 
 if [ -z "$NODE_PATH" ]; then
     echo "❌ Error: 'node' not found in PATH."
+    exit 1
+fi
+
+if ! command -v systemctl >/dev/null 2>&1; then
+    echo "❌ Error: systemd is required to register Mirrorial services."
     exit 1
 fi
 
@@ -31,6 +42,7 @@ ExecStart=$NODE_PATH $PROJECT_ROOT/backend/index.js
 WorkingDirectory=$PROJECT_ROOT/backend
 Restart=always
 User=$ACTUAL_USER
+Environment=HOME=$USER_HOME
 Environment=NODE_ENV=production
 Environment=PORT=3000
 
@@ -46,10 +58,11 @@ Description=Mirrorial Flutter Display
 After=mirror-backend.service
 
 [Service]
-# Note: Assumes flutter-pi is installed in /opt/flutter-pi
 ExecStart=/opt/flutter-pi/flutter-pi --release $PROJECT_ROOT/display_app/bundle
 Restart=always
 User=$ACTUAL_USER
+WorkingDirectory=$PROJECT_ROOT
+Environment=HOME=$USER_HOME
 Environment=DISPLAY=:0
 
 [Install]

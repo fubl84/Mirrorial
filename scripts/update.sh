@@ -1,10 +1,19 @@
 #!/bin/bash
 
 # Mirrorial - Intelligent Update Script
-set -e
+set -euo pipefail
 PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 FLUTTER_BIN="$PROJECT_ROOT/scripts/flutterw.sh"
 FORCE=false
+
+restart_service_if_present() {
+    local unit="$1"
+    if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "$unit" >/dev/null 2>&1; then
+        sudo systemctl restart "$unit"
+    else
+        echo "ℹ️ $unit is not registered. Skipping restart."
+    fi
+}
 
 # Redirect temp folders to SD card
 export TMPDIR="$HOME/.mirrorial_tmp"
@@ -49,7 +58,7 @@ if file_changed "$PROJECT_ROOT/remote_ui/package.json" "$PROJECT_ROOT/remote_ui/
 fi
 if [ "$UI_REBUILD_NEEDED" = true ] || needs_build "$PROJECT_ROOT/remote_ui/src" "$PROJECT_ROOT/remote_ui/dist/index.html"; then
     cd "$PROJECT_ROOT/remote_ui" && npm run build
-    sudo systemctl restart mirror-backend
+    restart_service_if_present mirror-backend.service
 fi
 
 # 3. Flutter Display (Validate SDK First)
@@ -77,7 +86,7 @@ else
         "$FLUTTER_BIN" build bundle
         rm -rf "$PROJECT_ROOT/display_app/bundle"
         cp -r "$PROJECT_ROOT/display_app/build/flutter_assets" "$PROJECT_ROOT/display_app/bundle"
-        sudo systemctl restart mirror-display
+        restart_service_if_present mirror-display.service
     fi
 fi
 

@@ -1,11 +1,12 @@
 #!/bin/bash
 
 # Mirrorial - Flutter Display Build Script (Optimized)
-set -e
+set -euo pipefail
 
 PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 FLUTTER_SDK_DIR="$HOME/flutter"
 FLUTTER_BIN="$FLUTTER_SDK_DIR/bin/flutter"
+RESTART_DISPLAY=${MIRRORIAL_SKIP_RESTART:-0}
 
 # CRITICAL: Redirect temp folders away from RAM-disk (/tmp) to the SD card
 export TMPDIR="$HOME/.mirrorial_tmp"
@@ -49,8 +50,15 @@ rm -rf "$PROJECT_ROOT/display_app/bundle"
 cp -r "$PROJECT_ROOT/display_app/build/flutter_assets" "$PROJECT_ROOT/display_app/bundle"
 
 # 4. Cleanup
-rm -rf "$TMPDIR/*"
+rm -rf "$TMPDIR"/*
 
 echo "✅ Build complete!"
-echo "🔄 Restarting display service..."
-sudo systemctl restart mirror-display
+
+if [[ "$RESTART_DISPLAY" == "1" ]]; then
+    echo "ℹ️ Skipping display service restart."
+elif command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files mirror-display.service >/dev/null 2>&1; then
+    echo "🔄 Restarting display service..."
+    sudo systemctl restart mirror-display.service
+else
+    echo "ℹ️ mirror-display.service is not registered yet. Skipping restart."
+fi

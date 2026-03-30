@@ -1,5 +1,7 @@
 # Mirrorial
 
+Current release target: `v1.0`
+
 Mirrorial is an open source smart mirror platform built around a native Flutter display, a lightweight Node.js backend, and a browser-based remote configuration UI. The project is designed to avoid the usual Chromium-heavy smart mirror stack and instead focus on a faster, lower-overhead display pipeline that fits Raspberry Pi and desktop development workflows.
 
 Developed by **Christoph Seiler | Flaming Battenberg**.
@@ -17,11 +19,13 @@ Developed by **Christoph Seiler | Flaming Battenberg**.
 - Native Flutter display app with configurable mirror modules
 - Remote web UI for layout and integration settings
 - Config-driven grid layout for mirror widgets
-- Clock, weather, calendar, Home Assistant, and daily brief modules
-- Google Calendar OAuth flow handled by the backend
+- Clock, weather, calendar, Home Assistant, daily brief, and travel time modules
+- Google Calendar, ICS, and CalDAV sync through one backend calendar pipeline
+- Household-aware Daily Brief, birthday overlays, and per-member age reveal control
+- Google Calendar OAuth flow handled by the backend for advanced self-hosted setups
 - Runtime cache and account storage outside the repository in `~/.config/mirrorial`
 - macOS development workflow for running backend, UI, and display together
-- Raspberry Pi oriented setup scripts for self-hosted deployment
+- Raspberry Pi oriented unattended install path for self-hosted deployment
 
 ## Architecture
 
@@ -118,9 +122,12 @@ Mirrorial uses a root-level `config.json` for system, theme, layout, and module 
 - calendar
 - Home Assistant
 
+Additional travel settings, calendar sources, birthday behavior, and household metadata are configured in the Remote UI and normalized by the backend for older config files.
+
 Google Calendar setup is documented here:
 
 - [GOOGLE_AUTH_SETUP.md](./GOOGLE_AUTH_SETUP.md)
+- [GOOGLE_ROUTES_SETUP.md](./GOOGLE_ROUTES_SETUP.md)
 
 Runtime data is stored outside the repository, primarily in:
 
@@ -132,13 +139,26 @@ Runtime data is stored outside the repository, primarily in:
 
 The repository includes Linux-oriented setup and maintenance scripts in `scripts/`, including:
 
+- `scripts/install_pi.sh`
 - `scripts/setup.sh`
 - `scripts/install_deps.sh`
 - `scripts/install_engine.sh`
 - `scripts/register_services.sh`
 - `scripts/check_health.sh`
 
-The intended deployment target is a self-hosted smart mirror environment, especially Raspberry Pi based hardware. Review these scripts before running them on a device, because they install system packages, configure services, and assume a Pi-style host setup.
+Supported `v1.0` deployment target:
+
+- Raspberry Pi Zero 2 W or newer
+- Raspberry Pi OS Bookworm 64-bit
+- Linux with systemd
+
+Recommended installer command from a freshly cloned repo:
+
+```bash
+./scripts/install_pi.sh --no-reboot
+```
+
+Use `--dry-run` to inspect the steps first. The installer is designed to run unattended, install dependencies, build the remote UI and display bundle, register services, and run a health check.
 
 ## Testing and verification
 

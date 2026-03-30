@@ -111,25 +111,58 @@ class TripContext {
   }
 }
 
+class BirthdayContext {
+  final String memberId;
+  final String memberName;
+  final bool isToday;
+  final bool isTomorrow;
+  final int? turning;
+  final bool allowAgeReveal;
+
+  BirthdayContext({
+    required this.memberId,
+    required this.memberName,
+    required this.isToday,
+    required this.isTomorrow,
+    required this.turning,
+    required this.allowAgeReveal,
+  });
+
+  factory BirthdayContext.fromJson(Map<String, dynamic> json) {
+    return BirthdayContext(
+      memberId: json['memberId']?.toString() ?? '',
+      memberName: json['memberName']?.toString() ?? '',
+      isToday: json['isToday'] == true,
+      isTomorrow: json['isTomorrow'] == true,
+      turning: json['turning'] is num ? (json['turning'] as num).toInt() : null,
+      allowAgeReveal: json['allowAgeReveal'] == true,
+    );
+  }
+}
+
 class ContextSnapshot {
   final String? updatedAt;
   final DailyBrief brief;
   final TripContext? activeTrip;
+  final BirthdayContext? birthdayContext;
 
   ContextSnapshot({
     required this.updatedAt,
     required this.brief,
     required this.activeTrip,
+    required this.birthdayContext,
   });
 
   factory ContextSnapshot.fromJson(Map<String, dynamic> json) {
     final briefJson = json['brief'] is Map ? (json['brief'] as Map).cast<String, dynamic>() : <String, dynamic>{};
     final activeTripJson = json['activeTrip'] is Map ? (json['activeTrip'] as Map).cast<String, dynamic>() : null;
+    final birthdayJson = json['birthdayContext'] is Map ? (json['birthdayContext'] as Map).cast<String, dynamic>() : null;
 
     return ContextSnapshot(
       updatedAt: json['updatedAt'],
       brief: DailyBrief.fromJson(briefJson),
       activeTrip: activeTripJson != null ? TripContext.fromJson(activeTripJson) : null,
+      birthdayContext: birthdayJson != null ? BirthdayContext.fromJson(birthdayJson) : null,
     );
   }
 }
@@ -160,6 +193,7 @@ class ContextService {
         updatedAt: null,
         brief: DailyBrief(headline: 'Daily brief', bullets: [], householdView: '', items: const [], source: 'deterministic'),
         activeTrip: null,
+        birthdayContext: null,
       );
     }
 
@@ -176,6 +210,7 @@ class ContextService {
           updatedAt: null,
           brief: DailyBrief(headline: 'Daily brief', bullets: [], householdView: '', items: const [], source: 'deterministic'),
           activeTrip: null,
+          birthdayContext: null,
         );
       }
       await Future<void>.delayed(const Duration(minutes: 5));

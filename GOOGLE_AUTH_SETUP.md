@@ -1,5 +1,7 @@
 # Google Auth Setup
 
+Status for `v1.0`: Mirrorial supports Google Calendar for local development and advanced self-hosted deployments. A brokered one-click consumer pairing service is not part of `v1.0`.
+
 Mirrorial currently uses a backend-owned Google OAuth flow:
 
 - The Remote UI opens a popup.
@@ -78,7 +80,7 @@ In Mirrorial:
 
 - Set `Redirect URI` to the same HTTPS callback.
 
-This is the clean direct production setup.
+This is the supported `v1.0` production shape for Google Calendar.
 
 ### B. Consumer mirror on home LAN
 
@@ -93,7 +95,7 @@ This is where Google auth becomes awkward. A local hostname or LAN IP is not a s
 - User authenticates against a public HTTPS broker such as `https://auth.mirrorial.app`.
 - The broker hands the resulting account connection back to the device.
 
-That broker is not implemented yet in this repo. The current direct popup flow is best suited to development and controlled HTTPS deployments.
+That broker is not implemented in this repo for `v1.0`. The current direct popup flow is best suited to development and controlled HTTPS deployments managed by technical self-hosters.
 
 ## 4. Current scopes
 
@@ -150,4 +152,4 @@ Check:
 
 ### Pi / mirror.local deployment
 
-Use Mac/local dev first. For consumer home deployment, plan for the brokered HTTPS pairing flow later.
+Use Mac/local dev first. For a Pi reachable only as `http://mirror.local` or a LAN IP, treat Google Calendar as an advanced setup and expect to configure a proper HTTPS endpoint if you want the direct OAuth flow to work reliably.

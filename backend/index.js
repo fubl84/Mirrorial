@@ -18,9 +18,11 @@ const DATA_ROOT = process.env.MIRRORIAL_DATA_DIR || path.join(os.homedir(), '.co
 const SECRETS_PATH = path.join(DATA_ROOT, 'secrets.json');
 const HOUSEHOLD_PATH = path.join(DATA_ROOT, 'household.json');
 const GOOGLE_ACCOUNT_PATH = path.join(DATA_ROOT, 'accounts', 'google-account.json');
+const CALENDAR_SOURCES_PATH = path.join(DATA_ROOT, 'calendar-sources.json');
 const CALENDAR_CACHE_PATH = path.join(DATA_ROOT, 'cache', 'calendar-events.json');
 const CONTEXT_CACHE_PATH = path.join(DATA_ROOT, 'cache', 'context.json');
 const DAILY_BRIEF_DEBUG_PATH = path.join(DATA_ROOT, 'cache', 'daily-brief-debug.json');
+const TRAVEL_TIME_DEBUG_PATH = path.join(DATA_ROOT, 'cache', 'travel-time-debug.json');
 const TRANSPORT_CACHE_PATH = path.join(DATA_ROOT, 'cache', 'transport-live.json');
 const GEOCODE_CACHE_PATH = path.join(DATA_ROOT, 'cache', 'geocode.json');
 const ROUTING_CACHE_PATH = path.join(DATA_ROOT, 'cache', 'routing.json');
@@ -31,7 +33,7 @@ const CALENDAR_SCOPES = [
 ];
 const GOOGLE_AUTH_STATES = new Map();
 const LOCAL_HOST_PATTERNS = ['localhost', '127.0.0.1', '::1'];
-const SHARED_MODULE_TYPES = new Set(['clock', 'weather', 'home_assistant', 'calendar', 'daily_brief']);
+const SHARED_MODULE_TYPES = new Set(['clock', 'weather', 'home_assistant', 'calendar', 'daily_brief', 'travel_time']);
 
 const buildDefaultModuleConfig = (type) => {
   switch (type) {
@@ -66,6 +68,10 @@ const buildDefaultModuleConfig = (type) => {
       return {
         maxItems: 3,
         pageSeconds: 10,
+      };
+    case 'travel_time':
+      return {
+        items: [],
       };
     default:
       return {};
@@ -163,6 +169,20 @@ const DEFAULT_CONFIG = {
       profile: 'driving-car',
       refreshMinutes: 30,
     },
+    travel: {
+      enabled: false,
+      transportProvider: 'none',
+      routingProvider: 'none',
+      routingBaseUrl: '',
+      routingProfile: 'driving-car',
+      googleRoutesEnabled: false,
+      googleRoutesForAllModes: false,
+      refreshMinutes: 30,
+      homeAirport: '',
+      closestTrainStation: '',
+      closestBusStation: '',
+      closestTubeStation: '',
+    },
   },
   gridLayout: {
     template: 'portrait_focus',
@@ -204,6 +224,10 @@ const DEFAULT_HOUSEHOLD = {
   },
   members: [],
   savedPlaces: [],
+};
+
+const DEFAULT_CALENDAR_SOURCE_STORE = {
+  sources: [],
 };
 
 app.use(cors());
@@ -319,7 +343,7 @@ const normalizeModuleSettings = (moduleSettings = {}, layoutModules = []) => {
 };
 
 const ROTATOR_ANIMATION_TYPES = new Set(['swipe', 'blend', 'lift', 'none']);
-const ROTATOR_CHILD_TYPES = new Set(['clock', 'weather', 'home_assistant', 'calendar', 'daily_brief']);
+const ROTATOR_CHILD_TYPES = new Set(['clock', 'weather', 'home_assistant', 'calendar', 'daily_brief', 'travel_time']);
 
 const normalizeRotatorChildModule = (module, index = 0, moduleSettings = null) => {
   const type = ROTATOR_CHILD_TYPES.has(module?.type) ? module.type : 'clock';
@@ -450,6 +474,7 @@ const ensureRuntimePaths = async () => {
   await fs.ensureDir(path.dirname(SECRETS_PATH));
   await fs.ensureDir(path.dirname(HOUSEHOLD_PATH));
   await fs.ensureDir(path.dirname(GOOGLE_ACCOUNT_PATH));
+  await fs.ensureDir(path.dirname(CALENDAR_SOURCES_PATH));
   await fs.ensureDir(path.dirname(CALENDAR_CACHE_PATH));
   await fs.ensureDir(path.dirname(CONTEXT_CACHE_PATH));
   await fs.ensureDir(path.dirname(DAILY_BRIEF_DEBUG_PATH));
@@ -504,6 +529,50 @@ const normalizeConfig = (rawConfig = {}) => {
   if (Array.isArray(calendarModule?.config?.calendarIds) && config.services.google.selectedCalendarIds.length === 0) {
     config.services.google.selectedCalendarIds = calendarModule.config.calendarIds;
   }
+
+  const rawTravel = rawConfig?.services?.travel && typeof rawConfig.services.travel === 'object'
+    ? rawConfig.services.travel
+    : {};
+  const hasRawTravelField = (key) => Object.prototype.hasOwnProperty.call(rawTravel, key);
+  const transport = config.services.transport || {};
+  const routing = config.services.routing || {};
+  const legacyGoogleRoutes = rawTravel.routingProvider === 'google_routes' || routing.provider === 'google_routes';
+  config.services.travel = {
+    ...clone(DEFAULT_CONFIG.services.travel),
+    ...rawTravel,
+    enabled: rawTravel.enabled ?? Boolean(transport.enabled || routing.enabled),
+    transportProvider: hasRawTravelField('transportProvider') ? (rawTravel.transportProvider || 'none') : (transport.provider || 'none'),
+    routingProvider: hasRawTravelField('routingProvider')
+      ? ((rawTravel.routingProvider === 'google_routes') ? 'none' : (rawTravel.routingProvider || 'none'))
+      : ((routing.provider === 'google_routes') ? 'none' : (routing.provider || 'none')),
+    routingBaseUrl: hasRawTravelField('routingBaseUrl') ? `${rawTravel.routingBaseUrl || ''}` : (routing.baseUrl || ''),
+    routingProfile: hasRawTravelField('routingProfile') ? (rawTravel.routingProfile || 'driving-car') : (routing.profile || 'driving-car'),
+    googleRoutesEnabled: hasRawTravelField('googleRoutesEnabled') ? rawTravel.googleRoutesEnabled === true : legacyGoogleRoutes,
+    googleRoutesForAllModes: hasRawTravelField('googleRoutesForAllModes') ? rawTravel.googleRoutesForAllModes === true : legacyGoogleRoutes,
+    refreshMinutes: Number(rawTravel.refreshMinutes) || Number(routing.refreshMinutes) || Number(transport.refreshMinutes) || 30,
+    homeAirport: hasRawTravelField('homeAirport') ? `${rawTravel.homeAirport || ''}` : (transport.homeAirport || ''),
+    closestTrainStation: hasRawTravelField('closestTrainStation') ? `${rawTravel.closestTrainStation || ''}` : (transport.homeStation || ''),
+    closestBusStation: hasRawTravelField('closestBusStation') ? `${rawTravel.closestBusStation || ''}` : '',
+    closestTubeStation: hasRawTravelField('closestTubeStation') ? `${rawTravel.closestTubeStation || ''}` : '',
+  };
+  config.services.transport = {
+    ...transport,
+    enabled: Boolean(config.services.travel.enabled),
+    provider: config.services.travel.transportProvider || transport.provider || 'none',
+    homeAirport: config.services.travel.homeAirport || '',
+    homeStation: config.services.travel.closestTrainStation || '',
+    refreshMinutes: Number(config.services.travel.refreshMinutes) || Number(transport.refreshMinutes) || 30,
+  };
+  config.services.routing = {
+    ...routing,
+    enabled: Boolean(config.services.travel.enabled),
+    provider: config.services.travel.routingProvider || routing.provider || 'none',
+    baseUrl: config.services.travel.routingBaseUrl || '',
+    profile: config.services.travel.routingProfile || routing.profile || 'driving-car',
+    googleRoutesEnabled: config.services.travel.googleRoutesEnabled === true,
+    googleRoutesForAllModes: config.services.travel.googleRoutesForAllModes === true,
+    refreshMinutes: Number(config.services.travel.refreshMinutes) || Number(routing.refreshMinutes) || 30,
+  };
 
   return config;
 };
@@ -572,9 +641,20 @@ const readDailyBriefDebug = async () => readJsonIfExists(DAILY_BRIEF_DEBUG_PATH,
   stages: {},
 });
 
+const readTravelTimeDebug = async () => readJsonIfExists(TRAVEL_TIME_DEBUG_PATH, {
+  updatedAt: null,
+  items: [],
+  config: {},
+});
+
 const writeDailyBriefDebug = async (payload) => {
   await ensureRuntimePaths();
   await fs.writeJson(DAILY_BRIEF_DEBUG_PATH, payload, { spaces: 2 });
+};
+
+const writeTravelTimeDebug = async (payload) => {
+  await ensureRuntimePaths();
+  await fs.writeJson(TRAVEL_TIME_DEBUG_PATH, payload, { spaces: 2 });
 };
 
 const writeDisplayStatus = async (status) => {
@@ -652,10 +732,12 @@ const normalizeHousehold = (rawHousehold = {}) => {
   household.members = household.members.map((member, index) => ({
     id: member.id || `member_${index + 1}`,
     name: member.name || '',
+    nickname: member.nickname || '',
     birthdate: member.birthdate || '',
     calendarIds: Array.isArray(member.calendarIds) ? member.calendarIds.filter(Boolean) : [],
     tags: Array.isArray(member.tags) ? member.tags.filter(Boolean) : [],
     shareInBrief: member.shareInBrief !== false,
+    allowAgeReveal: member.allowAgeReveal === true,
     commute: {
       mode: member.commute?.mode || 'auto',
     },
@@ -703,12 +785,13 @@ const writeGeocodeCache = async (cache) => {
 const readHousehold = async () => normalizeHousehold(await readJsonIfExists(HOUSEHOLD_PATH, DEFAULT_HOUSEHOLD));
 
 const readSecrets = async () => {
-  const secrets = await readJsonIfExists(SECRETS_PATH, { google: {}, llm: {}, transport: {}, routing: {} });
+  const secrets = await readJsonIfExists(SECRETS_PATH, { google: {}, llm: {}, transport: {}, routing: {}, calendarSources: {} });
   return {
     google: secrets.google || {},
     llm: secrets.llm || {},
     transport: secrets.transport || {},
     routing: secrets.routing || {},
+    calendarSources: secrets.calendarSources || {},
   };
 };
 
@@ -728,6 +811,12 @@ const sanitizeConfigForClient = (config, secrets) => {
   safeConfig.services.transport.apiKeyConfigured = Boolean(secrets.transport?.apiKey);
   safeConfig.services.routing.apiKey = '';
   safeConfig.services.routing.apiKeyConfigured = Boolean(secrets.routing?.apiKey);
+  safeConfig.services.travel.transportApiKey = '';
+  safeConfig.services.travel.transportApiKeyConfigured = Boolean(secrets.transport?.apiKey);
+  safeConfig.services.travel.routingApiKey = '';
+  safeConfig.services.travel.routingApiKeyConfigured = Boolean(secrets.routing?.apiKey);
+  safeConfig.services.travel.googleRoutesApiKey = '';
+  safeConfig.services.travel.googleRoutesApiKeyConfigured = Boolean(secrets.routing?.googleRoutesApiKey);
   return safeConfig;
 };
 
@@ -767,10 +856,37 @@ const extractSecretsFromConfig = (config, currentSecrets) => {
     delete nextConfig.services.routing.apiKey;
   }
 
+  const incomingTravelTransportApiKey = nextConfig.services?.travel?.transportApiKey;
+  if (typeof incomingTravelTransportApiKey === 'string') {
+    if (incomingTravelTransportApiKey.trim()) {
+      nextSecrets.transport.apiKey = incomingTravelTransportApiKey.trim();
+    }
+    delete nextConfig.services.travel.transportApiKey;
+  }
+
+  const incomingTravelRoutingApiKey = nextConfig.services?.travel?.routingApiKey;
+  if (typeof incomingTravelRoutingApiKey === 'string') {
+    if (incomingTravelRoutingApiKey.trim()) {
+      nextSecrets.routing.apiKey = incomingTravelRoutingApiKey.trim();
+    }
+    delete nextConfig.services.travel.routingApiKey;
+  }
+
+  const incomingGoogleRoutesApiKey = nextConfig.services?.travel?.googleRoutesApiKey;
+  if (typeof incomingGoogleRoutesApiKey === 'string') {
+    if (incomingGoogleRoutesApiKey.trim()) {
+      nextSecrets.routing.googleRoutesApiKey = incomingGoogleRoutesApiKey.trim();
+    }
+    delete nextConfig.services.travel.googleRoutesApiKey;
+  }
+
   delete nextConfig.services?.google?.clientSecretConfigured;
   delete nextConfig.services?.llm?.apiKeyConfigured;
   delete nextConfig.services?.transport?.apiKeyConfigured;
   delete nextConfig.services?.routing?.apiKeyConfigured;
+  delete nextConfig.services?.travel?.transportApiKeyConfigured;
+  delete nextConfig.services?.travel?.routingApiKeyConfigured;
+  delete nextConfig.services?.travel?.googleRoutesApiKeyConfigured;
 
   return {
     config: normalizeConfig(nextConfig),
@@ -786,37 +902,90 @@ const saveConfig = async (rawConfig) => {
   return sanitizeConfigForClient(config, secrets);
 };
 
+const normalizeCalendarSource = (source = {}, index = 0) => {
+  const type = source.type === 'caldav' ? 'caldav' : 'ics';
+  return {
+    id: source.id || `calendar_source_${index + 1}`,
+    type,
+    name: source.name || '',
+    enabled: source.enabled !== false,
+    url: typeof source.url === 'string' ? source.url.trim() : '',
+    username: typeof source.username === 'string' ? source.username.trim() : '',
+    color: typeof source.color === 'string' ? source.color : '',
+  };
+};
+
+const readCalendarSources = async () => {
+  const raw = await readJsonIfExists(CALENDAR_SOURCES_PATH, DEFAULT_CALENDAR_SOURCE_STORE);
+  const sources = Array.isArray(raw.sources) ? raw.sources : [];
+  return {
+    sources: sources.map((source, index) => normalizeCalendarSource(source, index)),
+  };
+};
+
+const sanitizeCalendarSourcesForClient = (sources, secrets) => ({
+  sources: (sources?.sources || []).map((source) => ({
+    ...source,
+    password: '',
+    passwordConfigured: Boolean(secrets?.calendarSources?.[source.id]?.password),
+  })),
+});
+
+const saveCalendarSources = async (rawSources) => {
+  const currentSecrets = await readSecrets();
+  const sourceList = Array.isArray(rawSources?.sources) ? rawSources.sources : [];
+  const normalizedSources = sourceList.map((source, index) => normalizeCalendarSource(source, index));
+  const nextSecrets = clone(currentSecrets);
+  nextSecrets.calendarSources = nextSecrets.calendarSources || {};
+
+  normalizedSources.forEach((source) => {
+    const incomingPassword = typeof sourceList.find((entry) => `${entry?.id || ''}` === source.id)?.password === 'string'
+      ? sourceList.find((entry) => `${entry?.id || ''}` === source.id).password.trim()
+      : '';
+    if (!nextSecrets.calendarSources[source.id]) {
+      nextSecrets.calendarSources[source.id] = {};
+    }
+    if (incomingPassword) {
+      nextSecrets.calendarSources[source.id].password = incomingPassword;
+    }
+  });
+
+  const knownIds = new Set(normalizedSources.map((source) => source.id));
+  Object.keys(nextSecrets.calendarSources || {}).forEach((sourceId) => {
+    if (!knownIds.has(sourceId)) {
+      delete nextSecrets.calendarSources[sourceId];
+    }
+  });
+
+  await writeSecrets(nextSecrets);
+  await ensureRuntimePaths();
+  await fs.writeJson(CALENDAR_SOURCES_PATH, { sources: normalizedSources }, { spaces: 2, mode: 0o600 });
+  await fs.chmod(CALENDAR_SOURCES_PATH, 0o600).catch(() => {});
+
+  return sanitizeCalendarSourcesForClient({ sources: normalizedSources }, nextSecrets);
+};
+
 const normalizeAddressKey = (value) => value.toString().trim().toLowerCase();
 
-const geocodeAddress = async (address, geocodeCache) => {
-  const trimmedAddress = address.trim();
-  if (!trimmedAddress) {
-    return null;
+const geocodeWithOpenMeteo = async (trimmedAddress) => {
+  const response = await axios.get('https://geocoding-api.open-meteo.com/v1/search', {
+    params: {
+      name: trimmedAddress,
+      count: 1,
+      language: 'en',
+      format: 'json',
+    },
+    timeout: 8000,
+  });
+
+  const place = response.data?.results?.[0];
+  if (!place) {
+    return { provider: 'open-meteo', location: null, error: 'no_result' };
   }
 
-  const cacheKey = normalizeAddressKey(trimmedAddress);
-  if (geocodeCache.entries[cacheKey]) {
-    return geocodeCache.entries[cacheKey];
-  }
-
-  try {
-    const response = await axios.get('https://geocoding-api.open-meteo.com/v1/search', {
-      params: {
-        name: trimmedAddress,
-        count: 1,
-        language: 'en',
-        format: 'json',
-      },
-      timeout: 8000,
-    });
-
-    const place = response.data?.results?.[0];
-    if (!place) {
-      geocodeCache.entries[cacheKey] = null;
-      return null;
-    }
-
-    const location = {
+  return {
+    provider: 'open-meteo',
+    location: {
       label: [place.name, place.admin1, place.country].filter(Boolean).join(', '),
       latitude: place.latitude,
       longitude: place.longitude,
@@ -825,16 +994,138 @@ const geocodeAddress = async (address, geocodeCache) => {
       name: place.name || '',
       admin1: place.admin1 || '',
       resolvedAt: new Date().toISOString(),
-    };
+    },
+    error: null,
+  };
+};
 
-    geocodeCache.entries[cacheKey] = location;
-    return location;
+const geocodeWithOpenRouteService = async (trimmedAddress, routingConfig = {}, routingSecrets = {}) => {
+  if (routingConfig.provider !== 'openrouteservice' || !routingSecrets.apiKey) {
+    return { provider: 'openrouteservice', location: null, error: 'not_configured' };
+  }
+
+  const baseUrl = (routingConfig.baseUrl || 'https://api.openrouteservice.org').replace(/\/$/, '');
+  const response = await axios.get(`${baseUrl}/geocode/search`, {
+    params: {
+      text: trimmedAddress,
+      size: 1,
+    },
+    headers: {
+      Authorization: routingSecrets.apiKey,
+    },
+    timeout: 15000,
+  });
+
+  const feature = response.data?.features?.[0];
+  const coordinates = feature?.geometry?.coordinates;
+  if (!Array.isArray(coordinates) || coordinates.length < 2) {
+    return { provider: 'openrouteservice', location: null, error: 'no_result' };
+  }
+
+  const properties = feature.properties || {};
+  return {
+    provider: 'openrouteservice',
+    location: {
+      label: properties.label || properties.name || trimmedAddress,
+      latitude: Number(coordinates[1]),
+      longitude: Number(coordinates[0]),
+      timezone: properties.timezone || 'UTC',
+      country: properties.country || '',
+      name: properties.name || '',
+      admin1: properties.region || properties.localadmin || '',
+      resolvedAt: new Date().toISOString(),
+    },
+    error: null,
+  };
+};
+
+const geocodeAddressDetailed = async (address, geocodeCache, options = {}) => {
+  const trimmedAddress = address.trim();
+  if (!trimmedAddress) {
+    return {
+      location: null,
+      provider: 'none',
+      error: 'empty_address',
+      fromCache: false,
+      attempts: [],
+    };
+  }
+
+  const cacheKey = normalizeAddressKey(trimmedAddress);
+  if (geocodeCache.entries[cacheKey]) {
+    return {
+      location: geocodeCache.entries[cacheKey],
+      provider: 'cache',
+      error: null,
+      fromCache: true,
+      attempts: [],
+    };
+  }
+
+  const attempts = [];
+
+  try {
+    if (options.preferRoutingGeocoder) {
+      try {
+        const orsResult = await geocodeWithOpenRouteService(trimmedAddress, options.routingConfig, options.routingSecrets);
+        attempts.push({ provider: orsResult.provider, error: orsResult.error });
+        if (orsResult.location) {
+          geocodeCache.entries[cacheKey] = orsResult.location;
+          return {
+            location: orsResult.location,
+            provider: orsResult.provider,
+            error: null,
+            fromCache: false,
+            attempts,
+          };
+        }
+      } catch (error) {
+        attempts.push({ provider: 'openrouteservice', error: error.response?.data?.error?.message || error.message || 'request_failed' });
+      }
+    }
+
+    try {
+      const openMeteoResult = await geocodeWithOpenMeteo(trimmedAddress);
+      attempts.push({ provider: openMeteoResult.provider, error: openMeteoResult.error });
+      if (openMeteoResult.location) {
+        geocodeCache.entries[cacheKey] = openMeteoResult.location;
+        return {
+          location: openMeteoResult.location,
+          provider: openMeteoResult.provider,
+          error: null,
+          fromCache: false,
+          attempts,
+        };
+      }
+    } catch (error) {
+      attempts.push({ provider: 'open-meteo', error: error.response?.data?.reason || error.message || 'request_failed' });
+    }
+
+    geocodeCache.entries[cacheKey] = null;
+    return {
+      location: null,
+      provider: attempts[0]?.provider || 'unknown',
+      error: attempts.map((attempt) => `${attempt.provider}:${attempt.error}`).join(', ') || 'no_result',
+      fromCache: false,
+      attempts,
+    };
   } catch (error) {
-    return null;
+    return {
+      location: null,
+      provider: 'unknown',
+      error: error.message || 'request_failed',
+      fromCache: false,
+      attempts,
+    };
   }
 };
 
-const resolveStoredPlace = async (place, geocodeCache) => {
+const geocodeAddress = async (address, geocodeCache, options = {}) => {
+  const result = await geocodeAddressDetailed(address, geocodeCache, options);
+  return result.location;
+};
+
+const resolveStoredPlace = async (place, geocodeCache, options = {}) => {
   const nextPlace = {
     label: place?.label || '',
     address: place?.address || '',
@@ -846,7 +1137,7 @@ const resolveStoredPlace = async (place, geocodeCache) => {
     return nextPlace;
   }
 
-  const resolvedLocation = await geocodeAddress(nextPlace.address, geocodeCache);
+  const resolvedLocation = await geocodeAddress(nextPlace.address, geocodeCache, options);
   nextPlace.location = resolvedLocation
     ? {
       ...resolvedLocation,
@@ -916,8 +1207,6 @@ const writeGoogleAccount = async (account) => {
 
 const deleteGoogleAccount = async () => {
   await fs.remove(GOOGLE_ACCOUNT_PATH);
-  await fs.remove(CALENDAR_CACHE_PATH);
-  await fs.remove(CONTEXT_CACHE_PATH);
 };
 
 const withGoogleClient = async () => {
@@ -998,6 +1287,389 @@ const fetchGoogleCalendarEvents = async ({
   } while (pageToken);
 
   return events;
+};
+
+const DEFAULT_CALENDAR_CACHE = {
+  syncedAt: null,
+  connectedEmail: '',
+  calendars: [],
+  selectedCalendarIds: [],
+  events: [],
+  sources: [],
+};
+
+const decodeXmlEntities = (value = '') => value
+  .replace(/&lt;/g, '<')
+  .replace(/&gt;/g, '>')
+  .replace(/&amp;/g, '&')
+  .replace(/&quot;/g, '"')
+  .replace(/&#39;/g, '\'');
+
+const decodeIcsText = (value = '') => value
+  .replace(/\\n/gi, '\n')
+  .replace(/\\,/g, ',')
+  .replace(/\\;/g, ';')
+  .replace(/\\\\/g, '\\')
+  .trim();
+
+const unfoldIcsLines = (input = '') => input
+  .replace(/\r\n/g, '\n')
+  .replace(/\r/g, '\n')
+  .replace(/\n[ \t]/g, '');
+
+const formatCalDavDateTime = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  const iso = date.toISOString().replace(/[-:]/g, '');
+  return `${iso.slice(0, 15)}Z`;
+};
+
+const parseIcsDateValue = (value, isAllDay = false) => {
+  const normalized = `${value || ''}`.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  if (/^\d{8}$/.test(normalized)) {
+    const iso = `${normalized.slice(0, 4)}-${normalized.slice(4, 6)}-${normalized.slice(6, 8)}`;
+    return isAllDay ? iso : `${iso}T00:00:00`;
+  }
+
+  if (/^\d{8}T\d{6}Z$/.test(normalized)) {
+    return `${normalized.slice(0, 4)}-${normalized.slice(4, 6)}-${normalized.slice(6, 8)}T${normalized.slice(9, 11)}:${normalized.slice(11, 13)}:${normalized.slice(13, 15)}Z`;
+  }
+
+  if (/^\d{8}T\d{6}$/.test(normalized)) {
+    return `${normalized.slice(0, 4)}-${normalized.slice(4, 6)}-${normalized.slice(6, 8)}T${normalized.slice(9, 11)}:${normalized.slice(11, 13)}:${normalized.slice(13, 15)}`;
+  }
+
+  return normalized;
+};
+
+const parseIcsEvents = ({ sourceId, calendarId, calendarSummary, calendarColor = '', text, defaultUrl = '' }) => {
+  const unfolded = unfoldIcsLines(text);
+  const blocks = unfolded.match(/BEGIN:VEVENT[\s\S]*?END:VEVENT/g) || [];
+  return blocks.map((block, index) => {
+    const lines = block.split('\n');
+    const props = {};
+    lines.forEach((line) => {
+      const separatorIndex = line.indexOf(':');
+      if (separatorIndex <= 0) {
+        return;
+      }
+      const rawKey = line.slice(0, separatorIndex);
+      const value = line.slice(separatorIndex + 1);
+      const key = rawKey.split(';')[0].toUpperCase();
+      const params = rawKey.includes(';')
+        ? rawKey.split(';').slice(1).reduce((acc, segment) => {
+          const [paramKey, paramValue] = segment.split('=');
+          if (paramKey && paramValue) {
+            acc[paramKey.toUpperCase()] = paramValue;
+          }
+          return acc;
+        }, {})
+        : {};
+      if (!props[key]) {
+        props[key] = [];
+      }
+      props[key].push({ value, params });
+    });
+
+    const uid = props.UID?.[0]?.value || `${sourceId}:${calendarId}:${index + 1}`;
+    const startMeta = props.DTSTART?.[0] || null;
+    const endMeta = props.DTEND?.[0] || null;
+    const isAllDay = (startMeta?.params?.VALUE || '').toUpperCase() === 'DATE' || /^\d{8}$/.test(startMeta?.value || '');
+    const start = parseIcsDateValue(startMeta?.value, isAllDay);
+    const end = parseIcsDateValue(endMeta?.value || startMeta?.value, isAllDay) || start;
+    const status = decodeIcsText(props.STATUS?.[0]?.value || 'confirmed').toLowerCase();
+
+    return {
+      id: `${sourceId}:${uid}`,
+      sourceId,
+      status,
+      title: decodeIcsText(props.SUMMARY?.[0]?.value || '(No title)'),
+      description: decodeIcsText(props.DESCRIPTION?.[0]?.value || ''),
+      location: decodeIcsText(props.LOCATION?.[0]?.value || ''),
+      start,
+      end,
+      isAllDay,
+      htmlLink: decodeIcsText(props.URL?.[0]?.value || defaultUrl || ''),
+      calendarId,
+      calendarSummary,
+      calendarColor,
+      calendarTextColor: '',
+      isRecurring: Boolean(props.RRULE?.[0]?.value || props['RECURRENCE-ID']?.[0]?.value),
+      recurringEventId: decodeIcsText(props.UID?.[0]?.value || ''),
+      attendees: [],
+    };
+  }).filter((event) => event.start && event.end && event.status !== 'cancelled');
+};
+
+const buildSourceCalendarId = (sourceId, rawCalendarId) => `${sourceId}:${rawCalendarId}`;
+
+const buildSourceCalendar = ({ source, rawCalendarId, summary }) => ({
+  id: buildSourceCalendarId(source.id, rawCalendarId),
+  summary: summary || source.name || source.url || source.id,
+  primary: false,
+  backgroundColor: source.color || '',
+  foregroundColor: '',
+  accessRole: source.type,
+  sourceId: source.id,
+  sourceType: source.type,
+});
+
+const buildBasicAuthConfig = (username, password = '') => {
+  const normalizedUsername = typeof username === 'string' ? username.trim() : '';
+  if (!normalizedUsername) {
+    return {};
+  }
+  return {
+    auth: {
+      username: normalizedUsername,
+      password,
+    },
+  };
+};
+
+const parseXmlResponseBlocks = (xml = '') => {
+  const matches = xml.match(/<[^>]*response[^>]*>[\s\S]*?<\/[^>]*response>/gi);
+  return matches || [];
+};
+
+const extractXmlTagValue = (xml = '', localName = '') => {
+  const match = xml.match(new RegExp(`<[^>]*${localName}[^>]*>([\\s\\S]*?)<\\/[^>]*${localName}>`, 'i'));
+  return match ? decodeXmlEntities(match[1].trim()) : '';
+};
+
+const normalizeCalendarPath = (baseUrl, href) => {
+  if (!href) {
+    return baseUrl;
+  }
+  try {
+    return new URL(href, baseUrl).toString();
+  } catch (error) {
+    return href;
+  }
+};
+
+const discoverCalDavCalendars = async ({ source, password }) => {
+  const response = await axios.request({
+    method: 'PROPFIND',
+    url: source.url,
+    headers: {
+      Depth: '1',
+      'content-type': 'application/xml; charset=utf-8',
+    },
+    data: `<?xml version="1.0" encoding="utf-8" ?>
+      <d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/" xmlns:c="urn:ietf:params:xml:ns:caldav">
+        <d:prop>
+          <d:displayname />
+          <d:resourcetype />
+        </d:prop>
+      </d:propfind>`,
+    timeout: 15000,
+    ...buildBasicAuthConfig(source.username, password),
+  });
+
+  const blocks = parseXmlResponseBlocks(response.data);
+  const calendars = blocks
+    .map((block, index) => {
+      const href = extractXmlTagValue(block, 'href');
+      const isCalendar = /<[^>]*calendar\b/i.test(block);
+      if (!href || !isCalendar) {
+        return null;
+      }
+      return {
+        rawId: href || `${source.id}_${index + 1}`,
+        url: normalizeCalendarPath(source.url, href),
+        summary: extractXmlTagValue(block, 'displayname') || source.name || href,
+      };
+    })
+    .filter(Boolean);
+
+  return calendars.length
+    ? calendars
+    : [{
+      rawId: source.url,
+      url: source.url,
+      summary: source.name || source.url,
+    }];
+};
+
+const fetchCalDavEvents = async ({ source, password, timeMin, timeMax }) => {
+  const calendars = await discoverCalDavCalendars({ source, password });
+  const results = [];
+
+  for (const calendar of calendars) {
+    const response = await axios.request({
+      method: 'REPORT',
+      url: calendar.url,
+      headers: {
+        Depth: '1',
+        'content-type': 'application/xml; charset=utf-8',
+      },
+      data: `<?xml version="1.0" encoding="utf-8" ?>
+        <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+          <d:prop>
+            <d:getetag />
+            <c:calendar-data />
+          </d:prop>
+          <c:filter>
+            <c:comp-filter name="VCALENDAR">
+              <c:comp-filter name="VEVENT">
+                <c:time-range start="${formatCalDavDateTime(timeMin)}" end="${formatCalDavDateTime(timeMax)}" />
+              </c:comp-filter>
+            </c:comp-filter>
+          </c:filter>
+        </c:calendar-query>`,
+      timeout: 20000,
+      ...buildBasicAuthConfig(source.username, password),
+    });
+
+    const blocks = parseXmlResponseBlocks(response.data);
+    blocks.forEach((block) => {
+      const calendarData = extractXmlTagValue(block, 'calendar-data');
+      if (!calendarData) {
+        return;
+      }
+      const normalizedCalendar = buildSourceCalendar({
+        source,
+        rawCalendarId: calendar.rawId,
+        summary: calendar.summary,
+      });
+      results.push(
+        ...parseIcsEvents({
+          sourceId: source.id,
+          calendarId: normalizedCalendar.id,
+          calendarSummary: normalizedCalendar.summary,
+          calendarColor: normalizedCalendar.backgroundColor,
+          text: calendarData,
+          defaultUrl: calendar.url,
+        }),
+      );
+    });
+  }
+
+  return {
+    calendars: calendars.map((calendar) => buildSourceCalendar({
+      source,
+      rawCalendarId: calendar.rawId,
+      summary: calendar.summary,
+    })),
+    events: results,
+  };
+};
+
+const fetchIcsEvents = async ({ source, password }) => {
+  const response = await axios.get(source.url, {
+    timeout: 15000,
+    responseType: 'text',
+    ...buildBasicAuthConfig(source.username, password),
+  });
+  const calendar = buildSourceCalendar({
+    source,
+    rawCalendarId: source.url,
+    summary: source.name || source.url,
+  });
+
+  return {
+    calendars: [calendar],
+    events: parseIcsEvents({
+      sourceId: source.id,
+      calendarId: calendar.id,
+      calendarSummary: calendar.summary,
+      calendarColor: calendar.backgroundColor,
+      text: typeof response.data === 'string' ? response.data : `${response.data || ''}`,
+      defaultUrl: source.url,
+    }),
+  };
+};
+
+const fetchCalendarSourceBundle = async ({ source, secrets, timeMin, timeMax }) => {
+  if (!source.enabled || !source.url) {
+    return { calendars: [], events: [], source: { id: source.id, type: source.type, status: 'disabled' } };
+  }
+
+  try {
+    const password = secrets?.calendarSources?.[source.id]?.password || '';
+    const payload = source.type === 'caldav'
+      ? await fetchCalDavEvents({ source, password, timeMin, timeMax })
+      : await fetchIcsEvents({ source, password });
+    return {
+      calendars: payload.calendars,
+      events: payload.events,
+      source: {
+        id: source.id,
+        type: source.type,
+        name: source.name || source.url,
+        status: 'ready',
+        eventCount: payload.events.length,
+      },
+    };
+  } catch (error) {
+    return {
+      calendars: [],
+      events: [],
+      source: {
+        id: source.id,
+        type: source.type,
+        name: source.name || source.url,
+        status: 'error',
+        error: error.message,
+      },
+    };
+  }
+};
+
+const fetchGoogleCalendarBundle = async ({ forceContext = false } = {}) => {
+  const [clientInfo, config] = await Promise.all([withGoogleClient(), readConfig()]);
+  if (!clientInfo) {
+    return null;
+  }
+
+  const { client, account } = clientInfo;
+  const calendarList = await googleRequest(client, 'https://www.googleapis.com/calendar/v3/users/me/calendarList');
+  const calendars = Array.isArray(calendarList.items) ? calendarList.items.map(summarizeCalendar) : [];
+
+  let selectedCalendarIds = Array.isArray(config.services.google.selectedCalendarIds)
+    ? config.services.google.selectedCalendarIds.filter(Boolean)
+    : [];
+
+  if (selectedCalendarIds.length === 0) {
+    const primaryCalendar = calendars.find((calendar) => calendar.primary) || calendars[0];
+    selectedCalendarIds = primaryCalendar ? [primaryCalendar.id] : [];
+    config.services.google.selectedCalendarIds = selectedCalendarIds;
+    await saveConfig(config);
+  }
+
+  const now = new Date();
+  const timeMin = new Date(now.getTime() - 86400000).toISOString();
+  const timeMax = new Date(now.getTime() + ((Number(config.services.context.tripLookaheadDays) || 14) * 86400000)).toISOString();
+  const selectedCalendars = calendars.filter((calendar) => selectedCalendarIds.includes(calendar.id));
+  const eventBuckets = await Promise.all(selectedCalendars.map((calendar) => fetchGoogleCalendarEvents({
+    client,
+    calendar,
+    timeMin,
+    timeMax,
+  })));
+
+  return {
+    connectedEmail: account.email || '',
+    calendars,
+    selectedCalendarIds,
+    events: eventBuckets.flat().sort((left, right) => new Date(left.start) - new Date(right.start)),
+    source: {
+      id: 'google',
+      type: 'google',
+      name: 'Google Calendar',
+      status: 'ready',
+    },
+    forceContext,
+    timeMin,
+    timeMax,
+  };
 };
 
 const weatherCodeToLabel = (code) => {
@@ -1558,7 +2230,7 @@ const inferTripTravelerLabel = (sourceEvents, household) => {
   const scoredMembers = members
     .filter((member) => member.shareInBrief !== false && member.name)
     .map((member) => {
-      const identityTokens = Array.from(new Set([member.name, ...(Array.isArray(member.tags) ? member.tags : [])]
+      const identityTokens = Array.from(new Set([member.nickname, member.name, ...(Array.isArray(member.tags) ? member.tags : [])]
         .map((token) => token?.toString().trim())
         .filter(Boolean)));
       const tokenMatch = identityTokens.find((token) => combinedText.includes(normalizeMatchText(token)));
@@ -1584,7 +2256,7 @@ const inferTripTravelerLabel = (sourceEvents, household) => {
     return best.tokenMatch;
   }
 
-  return best.member.name || '';
+  return best.member.nickname || best.member.name || '';
 };
 
 const TRIP_INTENT_KEYWORDS = {
@@ -2101,11 +2773,13 @@ const buildBirthdayContext = (household, lookaheadDays = 10) => {
       const turning = occurrence.getFullYear() - birthdate.getFullYear();
       return {
         memberId: member.id,
-        memberName: member.name,
+        memberName: member.nickname || member.name,
+        legalName: member.name,
         birthdate: member.birthdate,
         nextOccurrence: occurrence.toISOString(),
         daysUntil,
         turning,
+        allowAgeReveal: member.allowAgeReveal === true,
       };
     })
     .filter(Boolean)
@@ -2141,13 +2815,22 @@ const calculateDistanceKm = (origin, destination) => {
   return Math.round(earthRadiusKm * c);
 };
 
-const buildRoutingCacheKey = (origin, destination, profile) => [
-  profile || 'driving-car',
-  origin.latitude,
-  origin.longitude,
-  destination.latitude,
-  destination.longitude,
-].join(':');
+const buildRoutingCacheKey = ({ origin, destination, originPlace = null, destinationPlace = null, provider, profile, mode }) => {
+  const originToken = origin
+    ? `${origin.latitude}:${origin.longitude}`
+    : `addr:${normalizeAddressKey(originPlace?.address || '')}`;
+  const destinationToken = destination
+    ? `${destination.latitude}:${destination.longitude}`
+    : `addr:${normalizeAddressKey(destinationPlace?.address || '')}`;
+
+  return [
+    provider || 'estimated',
+    profile || 'driving-car',
+    mode || 'car',
+    originToken,
+    destinationToken,
+  ].join(':');
+};
 
 const inferRoutingProfile = (mode = 'auto') => {
   if (mode === 'bike') {
@@ -2215,48 +2898,655 @@ const fetchOpenRouteServiceEstimate = async (origin, destination, routingConfig,
     distanceKm,
     durationMinutes,
     summary: `About ${durationMinutes} min from home`,
+    trafficSeverity: 'neutral',
+    trafficDelayMinutes: null,
   };
 };
 
-const getRouteEstimate = async ({ origin, destination, routingConfig, routingSecrets, routingCache, mode = 'auto' }) => {
-  if (!origin || !destination) {
+const parseGoogleDurationSeconds = (value) => {
+  if (!value || typeof value !== 'string') {
+    return null;
+  }
+  const match = value.match(/^(-?\d+(?:\.\d+)?)s$/);
+  if (!match) {
+    return null;
+  }
+  return Number(match[1]);
+};
+
+const mapGoogleTravelMode = (mode = 'car') => {
+  switch (normalizeTravelMode(mode)) {
+    case 'bike':
+      return 'BICYCLE';
+    case 'walk':
+      return 'WALK';
+    case 'public_transport':
+      return 'TRANSIT';
+    default:
+      return 'DRIVE';
+  }
+};
+
+const buildTrafficSeverity = (delayMinutes, durationMinutes) => {
+  if (!Number.isFinite(delayMinutes) || delayMinutes <= 1) {
+    return 'green';
+  }
+  if (delayMinutes <= 6 || delayMinutes <= Math.max(3, Math.round((durationMinutes || 0) * 0.15))) {
+    return 'orange';
+  }
+  return 'red';
+};
+
+const buildGoogleTransitLineDetail = (transit = {}) => {
+  const line = transit.transitLine || {};
+  const rawLabel = [line.nameShort, line.name, transit.headsign, line.agencies?.[0]?.name]
+    .map((value) => value?.toString().trim())
+    .find(Boolean);
+  const vehicleType = line.vehicle?.type?.toString().trim() || '';
+
+  if (!rawLabel && !vehicleType) {
     return null;
   }
 
-  const profile = routingConfig.enabled
-    ? (routingConfig.profile || inferRoutingProfile(mode))
-    : inferRoutingProfile(mode);
-  const cacheKey = buildRoutingCacheKey(origin, destination, profile);
+  return {
+    vehicleType,
+    label: rawLabel || '',
+  };
+};
+
+const extractGoogleTransitLineDetails = (route) => {
+  const steps = route?.legs?.[0]?.steps;
+  if (!Array.isArray(steps)) {
+    return [];
+  }
+
+  const details = steps
+    .map((step) => {
+      const transit = step?.transitDetails;
+      if (!transit) {
+        return null;
+      }
+      return buildGoogleTransitLineDetail(transit);
+    })
+    .filter(Boolean);
+
+  const seen = new Set();
+  const unique = [];
+  for (const detail of details) {
+    const key = `${detail.vehicleType}:${detail.label}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(detail);
+    if (unique.length >= 3) {
+      break;
+    }
+  }
+  return unique;
+};
+
+const buildGoogleWaypoint = (location, place) => {
+  if (location?.latitude !== undefined && location?.longitude !== undefined) {
+    return {
+      location: {
+        latLng: {
+          latitude: location.latitude,
+          longitude: location.longitude,
+        },
+      },
+    };
+  }
+
+  if (place?.address) {
+    return {
+      address: place.address,
+    };
+  }
+
+  return null;
+};
+
+const fetchGoogleRoutesEstimate = async ({ origin, destination, originPlace = null, destinationPlace = null, routingSecrets, mode = 'car' }) => {
+  const travelMode = mapGoogleTravelMode(mode);
+  const originWaypoint = buildGoogleWaypoint(origin, originPlace);
+  const destinationWaypoint = buildGoogleWaypoint(destination, destinationPlace);
+  if (!originWaypoint || !destinationWaypoint) {
+    return null;
+  }
+  const body = {
+    origin: originWaypoint,
+    destination: destinationWaypoint,
+    travelMode,
+    units: 'METRIC',
+    languageCode: 'en-GB',
+    departureTime: new Date().toISOString(),
+    regionCode: 'de',
+  };
+
+  if (travelMode === 'DRIVE') {
+    body.routingPreference = 'TRAFFIC_AWARE_OPTIMAL';
+  }
+
+  const response = await axios.post('https://routes.googleapis.com/directions/v2:computeRoutes', body, {
+    headers: {
+      'X-Goog-Api-Key': routingSecrets.googleRoutesApiKey,
+      'X-Goog-FieldMask': 'routes.duration,routes.staticDuration,routes.distanceMeters,routes.legs.steps.transitDetails',
+      'content-type': 'application/json',
+    },
+    timeout: 15000,
+  });
+
+  const route = response.data?.routes?.[0];
+  if (!route) {
+    return null;
+  }
+
+  const durationSeconds = parseGoogleDurationSeconds(route.duration);
+  const staticDurationSeconds = parseGoogleDurationSeconds(route.staticDuration);
+  const distanceMeters = route.distanceMeters;
+  if (!durationSeconds || !distanceMeters) {
+    return null;
+  }
+
+  const durationMinutes = Math.max(1, Math.round(durationSeconds / 60));
+  const distanceKm = Math.round(distanceMeters / 1000);
+  const staticMinutes = Number.isFinite(staticDurationSeconds) ? Math.max(1, Math.round(staticDurationSeconds / 60)) : null;
+  const delayMinutes = staticMinutes !== null ? Math.max(0, durationMinutes - staticMinutes) : null;
+  const trafficSeverity = travelMode === 'DRIVE'
+    ? buildTrafficSeverity(delayMinutes, durationMinutes)
+    : 'neutral';
+
+  const summary = travelMode === 'TRANSIT'
+    ? `About ${durationMinutes} min by public transport`
+    : (travelMode === 'DRIVE'
+      ? (delayMinutes && delayMinutes > 0
+        ? `About ${durationMinutes} min with traffic`
+        : `About ${durationMinutes} min`)
+      : `About ${durationMinutes} min`);
+
+  return {
+    source: 'google_routes',
+    profile: travelMode,
+    distanceKm,
+    durationMinutes,
+    staticDurationMinutes: staticMinutes,
+    trafficDelayMinutes: delayMinutes,
+    trafficSeverity,
+    summary,
+    lineDetails: travelMode === 'TRANSIT'
+      ? extractGoogleTransitLineDetails(route)
+          .map((detail) => detail.label)
+          .filter(Boolean)
+      : [],
+    lineDetailsDetailed: travelMode === 'TRANSIT' ? extractGoogleTransitLineDetails(route) : [],
+  };
+};
+
+const resolveRoutingProviderForMode = (routingConfig, routingSecrets, mode = 'car') => {
+  const normalizedMode = normalizeTravelMode(mode);
+  const googleEnabled = routingConfig.googleRoutesEnabled === true && Boolean(routingSecrets.googleRoutesApiKey);
+
+  if (googleEnabled && (normalizedMode === 'car' || normalizedMode === 'public_transport' || routingConfig.googleRoutesForAllModes === true)) {
+    return 'google_routes';
+  }
+
+  if (routingConfig.enabled && routingConfig.provider === 'openrouteservice' && normalizedMode !== 'public_transport' && Boolean(routingSecrets.apiKey)) {
+    return 'openrouteservice';
+  }
+
+  return 'estimated';
+};
+
+const getRouteEstimate = async ({ origin, destination, originPlace = null, destinationPlace = null, routingConfig, routingSecrets, routingCache, mode = 'auto' }) => {
+  if ((!origin && !originPlace?.address) || (!destination && !destinationPlace?.address)) {
+    return null;
+  }
+
+  const effectiveProvider = resolveRoutingProviderForMode(routingConfig, routingSecrets, mode);
+  const profile = effectiveProvider === 'google_routes'
+    ? mapGoogleTravelMode(mode)
+    : (routingConfig.enabled ? (routingConfig.profile || inferRoutingProfile(mode)) : inferRoutingProfile(mode));
+  const cacheKey = buildRoutingCacheKey({
+    origin,
+    destination,
+    originPlace,
+    destinationPlace,
+    provider: effectiveProvider,
+    profile,
+    mode: normalizeTravelMode(mode),
+  });
   const refreshMinutes = Number(routingConfig.refreshMinutes) || 30;
   const cachedEntry = routingCache.entries?.[cacheKey];
   const isFresh = cachedEntry?.fetchedAt
     && (Date.now() - new Date(cachedEntry.fetchedAt).getTime()) < (refreshMinutes * 60000);
 
   if (isFresh && cachedEntry?.route) {
-    return cachedEntry.route;
+    return {
+      ...cachedEntry.route,
+      fetchedAt: cachedEntry.route?.fetchedAt || cachedEntry.fetchedAt,
+    };
   }
 
   let route = null;
   try {
-    if (routingConfig.enabled && routingConfig.provider === 'openrouteservice' && routingSecrets.apiKey) {
+    if (effectiveProvider === 'google_routes') {
+      route = await fetchGoogleRoutesEstimate({
+        origin,
+        destination,
+        originPlace,
+        destinationPlace,
+        routingSecrets,
+        mode,
+      });
+    } else if (effectiveProvider === 'openrouteservice') {
       route = await fetchOpenRouteServiceEstimate(origin, destination, routingConfig, routingSecrets);
     }
   } catch (error) {
     route = null;
   }
 
-  if (!route) {
+  if (!route && normalizeTravelMode(mode) !== 'public_transport') {
     route = estimateRouteFallback(origin, destination, mode);
   }
 
   if (route) {
-    routingCache.entries[cacheKey] = {
-      fetchedAt: new Date().toISOString(),
-      route,
+    const fetchedAt = new Date().toISOString();
+    const routeWithMeta = {
+      ...route,
+      fetchedAt,
     };
+    routingCache.entries[cacheKey] = {
+      fetchedAt,
+      route: routeWithMeta,
+    };
+    return routeWithMeta;
   }
 
   return route;
+};
+
+const resolveTravelAnchorPlace = async ({ referenceType, referenceId, label, address, household, config, geocodeCache, routingConfig, routingSecrets, includeDebug = false }) => {
+  const resolveOptions = {
+    preferRoutingGeocoder: true,
+    routingConfig,
+    routingSecrets,
+  };
+
+  const withDebug = async (place) => {
+    const resolvedPlace = await resolveStoredPlace(place || {}, geocodeCache, resolveOptions);
+    if (!includeDebug) {
+      return resolvedPlace;
+    }
+    const geocodeDebug = await geocodeAddressDetailed(resolvedPlace.address || '', geocodeCache, resolveOptions);
+    return {
+      place: resolvedPlace,
+      debug: {
+        provider: geocodeDebug.provider,
+        error: geocodeDebug.error,
+        fromCache: geocodeDebug.fromCache,
+        attempts: geocodeDebug.attempts,
+      },
+    };
+  };
+
+  if (referenceType === 'home' && household?.home) {
+    return withDebug(household.home);
+  }
+
+  if (referenceType === 'member_work') {
+    const member = (household?.members || []).find((entry) => entry.id === referenceId);
+    return withDebug(member?.places?.work || null);
+  }
+
+  if (referenceType === 'member_school') {
+    const member = (household?.members || []).find((entry) => entry.id === referenceId);
+    return withDebug(member?.places?.school || null);
+  }
+
+  if (referenceType === 'saved_place') {
+    return withDebug((household?.savedPlaces || []).find((entry) => entry.id === referenceId) || null);
+  }
+
+  if (referenceType === 'home_airport') {
+    return withDebug({ label: config.services?.travel?.homeAirport || 'Home airport', address: config.services?.travel?.homeAirport || '' });
+  }
+
+  if (referenceType === 'closest_train_station') {
+    return withDebug({ label: config.services?.travel?.closestTrainStation || 'Train station', address: config.services?.travel?.closestTrainStation || '' });
+  }
+
+  if (referenceType === 'closest_bus_station') {
+    return withDebug({ label: config.services?.travel?.closestBusStation || 'Bus station', address: config.services?.travel?.closestBusStation || '' });
+  }
+
+  if (referenceType === 'closest_tube_station') {
+    return withDebug({ label: config.services?.travel?.closestTubeStation || 'Tube station', address: config.services?.travel?.closestTubeStation || '' });
+  }
+
+  if (referenceType === 'custom') {
+    return withDebug({ label: label || '', address: address || '' });
+  }
+
+  return includeDebug ? { place: null, debug: null } : null;
+};
+
+const normalizeTravelMode = (value = '') => {
+  switch (`${value}`.trim().toLowerCase()) {
+    case 'car':
+      return 'car';
+    case 'bike':
+    case 'cycling':
+      return 'bike';
+    case 'walk':
+    case 'walking':
+      return 'walk';
+    case 'public_transport':
+    case 'transit':
+    case 'train':
+      return 'public_transport';
+    default:
+      return 'car';
+  }
+};
+
+const buildTravelTimeSeverity = ({ minutes, mode }) => {
+  const normalizedMode = normalizeTravelMode(mode);
+  const greenMax = normalizedMode === 'walk' ? 20 : 30;
+  const orangeMax = normalizedMode === 'walk' ? 40 : 60;
+  if (minutes <= greenMax) return 'green';
+  if (minutes <= orangeMax) return 'orange';
+  return 'red';
+};
+
+const buildTravelLineDetails = (route, mode) => {
+  if (normalizeTravelMode(mode) !== 'public_transport') {
+    return [];
+  }
+  return Array.isArray(route?.lineDetails) ? route.lineDetails : [];
+};
+
+const buildTravelLineDetailsDetailed = (route, mode) => {
+  if (normalizeTravelMode(mode) !== 'public_transport') {
+    return [];
+  }
+  return Array.isArray(route?.lineDetailsDetailed)
+    ? route.lineDetailsDetailed
+        .map((entry) => ({
+          vehicleType: entry?.vehicleType?.toString() || '',
+          label: entry?.label?.toString() || '',
+        }))
+        .filter((entry) => entry.vehicleType || entry.label)
+    : [];
+};
+
+const supportsTransitRouting = (routingConfig = {}, routingSecrets = {}) => (
+  routingConfig.googleRoutesEnabled === true && Boolean(routingSecrets.googleRoutesApiKey)
+);
+
+const supportsTrafficAwareDriving = (routingConfig = {}, routingSecrets = {}) => (
+  routingConfig.googleRoutesEnabled === true && Boolean(routingSecrets.googleRoutesApiKey)
+);
+
+const describeTravelAnchorRequirement = (referenceType, config) => {
+  switch (referenceType) {
+    case 'home':
+      return 'Set a household home address with a resolved location.';
+    case 'home_airport':
+      return 'Fill Home Airport in the Travel integration.';
+    case 'closest_train_station':
+      return 'Fill Closest Train Station in the Travel integration.';
+    case 'closest_bus_station':
+      return 'Fill Closest Bus Station in the Travel integration.';
+    case 'closest_tube_station':
+      return 'Fill Closest Tube Station in the Travel integration.';
+    case 'member_work':
+      return 'Set the household member work place with a valid address.';
+    case 'member_school':
+      return 'Set the household member school place with a valid address.';
+    case 'saved_place':
+      return 'Choose a saved place that has a valid address.';
+    case 'custom':
+      return 'Enter a destination or origin address that can be geocoded.';
+    default:
+      return config === 'origin'
+        ? 'Complete the route origin settings.'
+        : 'Complete the route destination settings.';
+  }
+};
+
+const buildTravelLocationIssueSummary = ({ item, origin, destination, config }) => {
+  const missingParts = [];
+
+  if (!hasResolvedLocation(origin)) {
+    missingParts.push(`Origin missing. ${describeTravelAnchorRequirement(item.originType || 'home', config)}`);
+  }
+
+  if (!hasResolvedLocation(destination)) {
+    missingParts.push(`Destination missing. ${describeTravelAnchorRequirement(item.destinationType || 'custom', config)}`);
+  }
+
+  return missingParts.join(' ');
+};
+
+const summarizePlaceForDebug = (place) => ({
+  label: place?.label || '',
+  address: place?.address || '',
+  hasLocation: hasResolvedLocation(place),
+  location: hasResolvedLocation(place)
+    ? {
+      latitude: place.location.latitude,
+      longitude: place.location.longitude,
+      timezone: place.location.timezone || '',
+      resolvedLabel: place.location.label || '',
+    }
+    : null,
+});
+
+const computeTravelTimeItems = async ({ items = [] }) => {
+  const [config, secrets, household, geocodeCache, routingCache] = await Promise.all([
+    readConfig(),
+    readSecrets(),
+    readHousehold(),
+    readGeocodeCache(),
+    readRoutingCache(),
+  ]);
+  const routingConfig = config.services.routing || {};
+  const routingSecrets = secrets.routing || {};
+
+  const results = [];
+  const debugItems = [];
+  let latestRouteFetchedAt = null;
+  for (const item of items) {
+    if (!item || item.enabled === false) {
+      continue;
+    }
+
+    const debugItem = {
+      id: item.id || `travel_item_${results.length + 1}`,
+      label: item.label || item.destinationLabel || 'Route',
+      input: {
+        originType: item.originType || 'home',
+        originReferenceId: item.originReferenceId || '',
+        originLabel: item.originLabel || '',
+        originAddress: item.originAddress || '',
+        destinationType: item.destinationType || 'custom',
+        destinationReferenceId: item.destinationReferenceId || '',
+        destinationLabel: item.destinationLabel || '',
+        destinationAddress: item.destinationAddress || '',
+        mode: normalizeTravelMode(item.mode),
+      },
+      origin: null,
+      destination: null,
+      status: 'pending',
+      summary: '',
+      route: null,
+    };
+
+    const origin = await resolveTravelAnchorPlace({
+      referenceType: item.originType || 'home',
+      referenceId: item.originReferenceId || '',
+      label: item.originLabel || '',
+      address: item.originAddress || '',
+      household,
+      config,
+      geocodeCache,
+      routingConfig,
+      routingSecrets,
+      includeDebug: true,
+    });
+    const resolvedOrigin = origin?.place || null;
+    debugItem.origin = {
+      ...summarizePlaceForDebug(resolvedOrigin),
+      geocode: origin?.debug || null,
+    };
+    const destination = await resolveTravelAnchorPlace({
+      referenceType: item.destinationType || 'custom',
+      referenceId: item.destinationReferenceId || '',
+      label: item.destinationLabel || '',
+      address: item.destinationAddress || '',
+      household,
+      config,
+      geocodeCache,
+      routingConfig,
+      routingSecrets,
+      includeDebug: true,
+    });
+    const resolvedDestination = destination?.place || null;
+    debugItem.destination = {
+      ...summarizePlaceForDebug(resolvedDestination),
+      geocode: destination?.debug || null,
+    };
+
+    const mode = normalizeTravelMode(item.mode);
+    const effectiveProvider = resolveRoutingProviderForMode(routingConfig, routingSecrets, mode);
+    const providerCanRouteFromAddress = effectiveProvider === 'google_routes';
+    const hasUsableOrigin = hasResolvedLocation(resolvedOrigin) || (providerCanRouteFromAddress && Boolean(resolvedOrigin?.address));
+    const hasUsableDestination = hasResolvedLocation(resolvedDestination) || (providerCanRouteFromAddress && Boolean(resolvedDestination?.address));
+
+    if (!hasUsableOrigin || !hasUsableDestination) {
+      const summary = buildTravelLocationIssueSummary({ item, origin: resolvedOrigin, destination: resolvedDestination, config });
+      results.push({
+        id: item.id || `travel_item_${results.length + 1}`,
+        label: item.label || item.destinationLabel || 'Route',
+        mode: normalizeTravelMode(item.mode),
+        status: 'missing_location',
+        summary,
+        severity: 'orange',
+        trafficSeverity: 'neutral',
+        trafficDelayMinutes: null,
+        lineDetails: [],
+        lineDetailsDetailed: [],
+      });
+      debugItems.push({
+        ...debugItem,
+        status: 'missing_location',
+        summary,
+      });
+      continue;
+    }
+
+    if (mode === 'public_transport' && !supportsTransitRouting(routingConfig, routingSecrets)) {
+      const summary = 'Public transport routing is not supported with the current provider. Use a transit-capable provider such as Google Routes.';
+      results.push({
+        id: item.id || `travel_item_${results.length + 1}`,
+        label: item.label || resolvedDestination.label || resolvedDestination.location?.label || 'Route',
+        originLabel: resolvedOrigin.label || resolvedOrigin.location?.label || 'Origin',
+        destinationLabel: resolvedDestination.label || resolvedDestination.location?.label || 'Destination',
+        mode,
+        status: 'unsupported_provider',
+        summary,
+        durationMinutes: null,
+        distanceKm: null,
+        severity: 'orange',
+        trafficSeverity: 'neutral',
+        trafficDelayMinutes: null,
+        lineDetails: [],
+        lineDetailsDetailed: [],
+      });
+      debugItems.push({
+        ...debugItem,
+        status: 'unsupported_provider',
+        summary,
+        route: null,
+      });
+      continue;
+    }
+
+    const route = await getRouteEstimate({
+      origin: hasResolvedLocation(resolvedOrigin) ? resolvedOrigin.location : null,
+      destination: hasResolvedLocation(resolvedDestination) ? resolvedDestination.location : null,
+      originPlace: resolvedOrigin,
+      destinationPlace: resolvedDestination,
+      routingConfig,
+      routingSecrets,
+      routingCache,
+      mode,
+    });
+    const minutes = Number(route?.durationMinutes) || 0;
+    const summary = route?.summary || 'No travel estimate available.';
+    if (route?.fetchedAt && (!latestRouteFetchedAt || new Date(route.fetchedAt).getTime() > new Date(latestRouteFetchedAt).getTime())) {
+      latestRouteFetchedAt = route.fetchedAt;
+    }
+    results.push({
+      id: item.id || `travel_item_${results.length + 1}`,
+      label: item.label || resolvedDestination.label || resolvedDestination.location?.label || 'Route',
+      originLabel: resolvedOrigin.label || resolvedOrigin.location?.label || 'Origin',
+      destinationLabel: resolvedDestination.label || resolvedDestination.location?.label || 'Destination',
+      mode,
+      status: route?.source === 'estimated' ? 'estimated' : 'live',
+      summary,
+      durationMinutes: minutes,
+      distanceKm: route?.distanceKm || null,
+      severity: buildTravelTimeSeverity({ minutes, mode }),
+      trafficSeverity: route?.trafficSeverity || 'neutral',
+      trafficDelayMinutes: route?.trafficDelayMinutes ?? null,
+      lineDetails: buildTravelLineDetails(route, mode),
+      lineDetailsDetailed: buildTravelLineDetailsDetailed(route, mode),
+      fetchedAt: route?.fetchedAt || null,
+    });
+    debugItems.push({
+      ...debugItem,
+      status: route?.source === 'estimated' ? 'estimated' : 'live',
+      summary,
+        route: route
+          ? {
+            source: route.source || '',
+            profile: route.profile || '',
+            durationMinutes: route.durationMinutes || null,
+            distanceKm: route.distanceKm || null,
+            trafficSeverity: route.trafficSeverity || 'neutral',
+            trafficDelayMinutes: route.trafficDelayMinutes ?? null,
+            lineDetails: Array.isArray(route.lineDetails) ? route.lineDetails : [],
+            lineDetailsDetailed: Array.isArray(route.lineDetailsDetailed) ? route.lineDetailsDetailed : [],
+            fetchedAt: route.fetchedAt || null,
+          }
+          : null,
+    });
+  }
+
+  await writeGeocodeCache(geocodeCache);
+  await writeRoutingCache(routingCache);
+  await writeTravelTimeDebug({
+    updatedAt: new Date().toISOString(),
+    config: {
+      travelEnabled: config.services?.travel?.enabled !== false,
+      routingProvider: routingConfig.provider || 'none',
+      routingBaseUrl: routingConfig.baseUrl || 'https://api.openrouteservice.org',
+      routingProfile: routingConfig.profile || 'driving-car',
+      routingApiKeyConfigured: Boolean(routingSecrets.apiKey),
+      googleRoutesEnabled: routingConfig.googleRoutesEnabled === true,
+      googleRoutesForAllModes: routingConfig.googleRoutesForAllModes === true,
+      googleRoutesApiKeyConfigured: Boolean(routingSecrets.googleRoutesApiKey),
+      supportsTransitRouting: supportsTransitRouting(routingConfig, routingSecrets),
+      supportsTrafficAwareDriving: supportsTrafficAwareDriving(routingConfig, routingSecrets),
+    },
+    items: debugItems,
+  });
+  return {
+    updatedAt: latestRouteFetchedAt,
+    items: results,
+  };
 };
 
 const guessMemberDestinationType = (member, event) => {
@@ -3242,10 +4532,11 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, trave
   }
 
   if (birthdayContext) {
+    const ageLabel = birthdayContext.allowAgeReveal ? ` turns ${birthdayContext.turning}` : ' has a birthday';
     const householdView = birthdayContext.isToday
-      ? `${birthdayContext.memberName} turns ${birthdayContext.turning} today.`
+      ? `${birthdayContext.memberName}${ageLabel} today.`
       : (birthdayContext.isTomorrow
-        ? `${birthdayContext.memberName} turns ${birthdayContext.turning} tomorrow.`
+        ? `${birthdayContext.memberName}${ageLabel} tomorrow.`
         : `${birthdayContext.memberName} has a birthday in ${birthdayContext.daysUntil} days.`);
     const score = birthdayContext.isToday ? 96 : (birthdayContext.isTomorrow ? 84 : Math.max(58, 76 - birthdayContext.daysUntil));
     candidates.push({
@@ -3256,10 +4547,12 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, trave
       householdView,
       bullets: uniqueTexts([
         birthdayContext.isToday
-          ? `${birthdayContext.memberName} turns ${birthdayContext.turning} today.`
+          ? `${birthdayContext.memberName}${ageLabel} today.`
           : (birthdayContext.isTomorrow
-            ? `${birthdayContext.memberName} turns ${birthdayContext.turning} tomorrow.`
-            : `${birthdayContext.memberName} turns ${birthdayContext.turning} on ${formatDateLabel(birthdayContext.nextOccurrence)}.`),
+            ? `${birthdayContext.memberName}${ageLabel} tomorrow.`
+            : (birthdayContext.allowAgeReveal
+              ? `${birthdayContext.memberName} turns ${birthdayContext.turning} on ${formatDateLabel(birthdayContext.nextOccurrence)}.`
+              : `${birthdayContext.memberName} has a birthday on ${formatDateLabel(birthdayContext.nextOccurrence)}.`)),
         birthdayContext.daysUntil >= 3 ? 'Good time to plan a card or present.' : '',
       ]),
     });
@@ -4824,53 +6117,41 @@ const ensureFreshContextCache = async () => {
   return { context: rebuiltContext, config };
 };
 
-const syncGoogleCalendarData = async ({ forceContext = false } = {}) => {
-  const [clientInfo, config, secrets, household] = await Promise.all([withGoogleClient(), readConfig(), readSecrets(), readHousehold()]);
-  if (!clientInfo) {
-    return null;
-  }
-
-  const { client, account } = clientInfo;
-  const previousCalendarCache = await readJsonIfExists(CALENDAR_CACHE_PATH, {
-    syncedAt: null,
-    connectedEmail: '',
-    calendars: [],
-    selectedCalendarIds: [],
-    events: [],
-  });
-  const calendarList = await googleRequest(client, 'https://www.googleapis.com/calendar/v3/users/me/calendarList');
-  const calendars = Array.isArray(calendarList.items) ? calendarList.items.map(summarizeCalendar) : [];
-
-  let selectedCalendarIds = Array.isArray(config.services.google.selectedCalendarIds)
-    ? config.services.google.selectedCalendarIds.filter(Boolean)
-    : [];
-
-  if (selectedCalendarIds.length === 0) {
-    const primaryCalendar = calendars.find((calendar) => calendar.primary) || calendars[0];
-    selectedCalendarIds = primaryCalendar ? [primaryCalendar.id] : [];
-    config.services.google.selectedCalendarIds = selectedCalendarIds;
-    await saveConfig(config);
-  }
-
+const syncCalendarData = async ({ forceContext = false } = {}) => {
+  const [config, secrets, household, sourceStore] = await Promise.all([
+    readConfig(),
+    readSecrets(),
+    readHousehold(),
+    readCalendarSources(),
+  ]);
+  const previousCalendarCache = await readJsonIfExists(CALENDAR_CACHE_PATH, DEFAULT_CALENDAR_CACHE);
+  const googleBundle = await fetchGoogleCalendarBundle({ forceContext });
   const now = new Date();
-  const timeMin = new Date(now.getTime() - 86400000).toISOString();
-  const timeMax = new Date(now.getTime() + ((Number(config.services.context.tripLookaheadDays) || 14) * 86400000)).toISOString();
-  const selectedCalendars = calendars.filter((calendar) => selectedCalendarIds.includes(calendar.id));
-  const eventBuckets = await Promise.all(selectedCalendars.map(async (calendar) => {
-    return fetchGoogleCalendarEvents({
-      client,
-      calendar,
-      timeMin,
-      timeMax,
-    });
-  }));
+  const timeMin = googleBundle?.timeMin || new Date(now.getTime() - 86400000).toISOString();
+  const timeMax = googleBundle?.timeMax || new Date(now.getTime() + ((Number(config.services.context.tripLookaheadDays) || 14) * 86400000)).toISOString();
+  const externalBundles = await Promise.all((sourceStore.sources || []).map((source) => fetchCalendarSourceBundle({
+    source,
+    secrets,
+    timeMin,
+    timeMax,
+  })));
 
   const calendarCache = {
     syncedAt: new Date().toISOString(),
-    connectedEmail: account.email || '',
-    calendars,
-    selectedCalendarIds,
-    events: eventBuckets.flat().sort((left, right) => new Date(left.start) - new Date(right.start)),
+    connectedEmail: googleBundle?.connectedEmail || '',
+    calendars: [
+      ...(googleBundle?.calendars || []),
+      ...externalBundles.flatMap((bundle) => bundle.calendars || []),
+    ],
+    selectedCalendarIds: googleBundle?.selectedCalendarIds || config.services.google.selectedCalendarIds || [],
+    events: [
+      ...(googleBundle?.events || []),
+      ...externalBundles.flatMap((bundle) => bundle.events || []),
+    ].sort((left, right) => new Date(left.start) - new Date(right.start)),
+    sources: [
+      ...(googleBundle?.source ? [googleBundle.source] : []),
+      ...externalBundles.map((bundle) => bundle.source),
+    ],
   };
 
   const calendarChanged = buildCalendarCacheFingerprint(previousCalendarCache) !== buildCalendarCacheFingerprint(calendarCache);
@@ -4891,13 +6172,9 @@ const syncGoogleCalendarData = async ({ forceContext = false } = {}) => {
   return calendarCache;
 };
 
-const loadCalendarCache = async () => readJsonIfExists(CALENDAR_CACHE_PATH, {
-  syncedAt: null,
-  connectedEmail: '',
-  calendars: [],
-  selectedCalendarIds: [],
-  events: [],
-});
+const syncGoogleCalendarData = async ({ forceContext = false } = {}) => syncCalendarData({ forceContext });
+
+const loadCalendarCache = async () => readJsonIfExists(CALENDAR_CACHE_PATH, DEFAULT_CALENDAR_CACHE);
 
 const loadContextCache = async () => readJsonIfExists(CONTEXT_CACHE_PATH, {
   updatedAt: null,
@@ -4943,6 +6220,29 @@ const buildAuthPopupHtml = ({ success, payload }) => `
   </body>
 </html>`;
 
+const detectSystemCapabilities = async () => {
+  const platform = process.platform;
+  const isLinux = platform === 'linux';
+  const isMac = platform === 'darwin';
+  const systemctlAvailable = isLinux
+    ? (await fs.pathExists('/bin/systemctl') || await fs.pathExists('/usr/bin/systemctl'))
+    : false;
+  const isPi = isLinux && await fs.pathExists('/sys/firmware/devicetree/base/model')
+    ? /raspberry pi/i.test((await fs.readFile('/sys/firmware/devicetree/base/model', 'utf8')).replace(/\0/g, ''))
+    : false;
+
+  return {
+    platform,
+    isLinux,
+    isMac,
+    isPi,
+    systemctlAvailable,
+    canRestartDisplay: Boolean(isLinux && systemctlAvailable),
+    canReboot: Boolean(isLinux && systemctlAvailable && isPi),
+    commandBackend: isLinux && systemctlAvailable ? 'systemd' : 'unsupported',
+  };
+};
+
 const startPowerManager = () => {
   setInterval(async () => {
     try {
@@ -4967,7 +6267,7 @@ const startPowerManager = () => {
 const startCalendarSyncLoop = () => {
   const runSync = async () => {
     try {
-      await syncGoogleCalendarData();
+      await syncCalendarData();
     } catch (error) {
       console.error('Calendar sync failed:', error.message);
     }
@@ -5023,18 +6323,36 @@ app.post('/api/household', async (req, res) => {
   }
 });
 
-app.post('/api/system/:command', (req, res) => {
+app.get('/api/system/capabilities', async (req, res) => {
+  try {
+    res.json(await detectSystemCapabilities());
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to detect system capabilities', details: error.message });
+  }
+});
+
+app.post('/api/system/:command', async (req, res) => {
   const { command } = req.params;
+  const capabilities = await detectSystemCapabilities();
   let shellCmd = '';
 
   switch (command) {
     case 'reboot':
+      if (!capabilities.canReboot) {
+        return res.status(400).json({ error: 'Reboot is not supported on this device.', capabilities });
+      }
       shellCmd = 'sudo reboot';
       break;
     case 'shutdown':
+      if (!capabilities.canReboot) {
+        return res.status(400).json({ error: 'Shutdown is not supported on this device.', capabilities });
+      }
       shellCmd = 'sudo shutdown -h now';
       break;
     case 'restart-display':
+      if (!capabilities.canRestartDisplay) {
+        return res.status(400).json({ error: 'Display restart is not supported on this device.', capabilities });
+      }
       shellCmd = 'sudo systemctl restart mirror-display';
       break;
     default:
@@ -5159,6 +6477,7 @@ app.get('/api/auth/google/status', async (req, res) => {
 app.post('/api/auth/google/disconnect', async (req, res) => {
   try {
     await deleteGoogleAccount();
+    await syncCalendarData({ forceContext: true });
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to disconnect Google account', details: error.message });
@@ -5178,6 +6497,44 @@ app.get('/api/google/calendars', async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ error: 'Failed to fetch calendars', details: error.message });
+  }
+});
+
+app.get('/api/calendars', async (req, res) => {
+  try {
+    const cache = await syncCalendarData();
+    res.json({
+      calendars: cache?.calendars || [],
+      selectedCalendarIds: cache?.selectedCalendarIds || [],
+      sources: cache?.sources || [],
+      lastSyncedAt: cache?.syncedAt || null,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch calendars', details: error.message });
+  }
+});
+
+app.get('/api/calendar-sources', async (req, res) => {
+  try {
+    const [sources, secrets] = await Promise.all([readCalendarSources(), readSecrets()]);
+    res.json(sanitizeCalendarSourcesForClient(sources, secrets));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to read calendar sources', details: error.message });
+  }
+});
+
+app.post('/api/calendar-sources', async (req, res) => {
+  try {
+    const saved = await saveCalendarSources(req.body);
+    const cache = await syncCalendarData({ forceContext: true });
+    res.json({
+      success: true,
+      ...saved,
+      calendars: cache?.calendars || [],
+      lastSyncedAt: cache?.syncedAt || null,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to save calendar sources', details: error.message });
   }
 });
 
@@ -5221,6 +6578,19 @@ app.get('/api/display/calendar/events', async (req, res) => {
   }
 });
 
+app.post('/api/display/travel-time', async (req, res) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    const travelSnapshot = await computeTravelTimeItems({ items });
+    res.json({
+      updatedAt: travelSnapshot.updatedAt,
+      items: travelSnapshot.items,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to build travel time items', details: error.message });
+  }
+});
+
 app.get('/api/display/context', async (req, res) => {
   try {
     const { context, config } = await ensureFreshContextCache();
@@ -5237,6 +6607,15 @@ app.get('/api/debug/daily-brief', async (req, res) => {
     res.json(debug);
   } catch (error) {
     res.status(500).json({ error: 'Failed to read Daily Brief debug log', details: error.message });
+  }
+});
+
+app.get('/api/debug/travel-time', async (req, res) => {
+  try {
+    const debug = await readTravelTimeDebug();
+    res.json(debug);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to read Travel Time debug log', details: error.message });
   }
 });
 

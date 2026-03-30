@@ -134,24 +134,27 @@ class _RotatingModuleContainerState extends State<RotatingModuleContainer>
     return Stack(
       children: [
         Positioned.fill(
-          child: AnimatedSwitcher(
-            duration: _animationType == 'none'
-                ? Duration.zero
-                : const Duration(milliseconds: 420),
-            switchInCurve: Curves.easeOutCubic,
-            switchOutCurve: Curves.easeInCubic,
-            transitionBuilder: (child, animation) =>
-                _buildTransition(animation, child),
-            layoutBuilder: (currentChild, previousChildren) => Stack(
-              fit: StackFit.expand,
-              children: [
-                ...previousChildren,
-                if (currentChild != null) currentChild,
-              ],
-            ),
-            child: KeyedSubtree(
-              key: ValueKey('${activePage['id']}-$_activeIndex'),
-              child: activeChild,
+          child: Padding(
+            padding: EdgeInsets.only(bottom: pages.length > 1 ? 22 : 0),
+            child: AnimatedSwitcher(
+              duration: _animationType == 'none'
+                  ? Duration.zero
+                  : const Duration(milliseconds: 420),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, animation) =>
+                  _buildTransition(animation, child),
+              layoutBuilder: (currentChild, previousChildren) => Stack(
+                fit: StackFit.expand,
+                children: [
+                  ...previousChildren,
+                  if (currentChild != null) currentChild,
+                ],
+              ),
+              child: KeyedSubtree(
+                key: ValueKey('${activePage['id']}-$_activeIndex'),
+                child: activeChild,
+              ),
             ),
           ),
         ),

@@ -4,6 +4,8 @@
 # Local Configuration & Secrets (IMPORTANT)
 config.json
 tokens.json
+adjustments.md
+adjustments/
 
 # Node.js / React
 node_modules/

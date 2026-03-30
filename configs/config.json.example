@@ -40,18 +40,18 @@
       "privacyMode": "cloud-redacted",
       "suppressRoutineRecurringEvents": true
     },
-    "transport": {
+    "travel": {
       "enabled": false,
-      "provider": "none",
+      "transportProvider": "none",
+      "routingProvider": "none",
+      "routingBaseUrl": "",
+      "routingProfile": "driving-car",
+      "googleRoutesEnabled": false,
+      "googleRoutesForAllModes": false,
       "homeAirport": "",
-      "homeStation": "",
-      "refreshMinutes": 30
-    },
-    "routing": {
-      "enabled": false,
-      "provider": "none",
-      "baseUrl": "",
-      "profile": "driving-car",
+      "closestTrainStation": "",
+      "closestBusStation": "",
+      "closestTubeStation": "",
       "refreshMinutes": 30
     }
   },
@@ -196,6 +196,9 @@
     "daily_brief": {
       "maxItems": 3,
       "pageSeconds": 10
+    },
+    "travel_time": {
+      "items": []
     }
   }
 }
