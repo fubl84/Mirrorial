@@ -34,6 +34,24 @@ const CALENDAR_SCOPES = [
 const GOOGLE_AUTH_STATES = new Map();
 const LOCAL_HOST_PATTERNS = ['localhost', '127.0.0.1', '::1'];
 const SHARED_MODULE_TYPES = new Set(['clock', 'weather', 'home_assistant', 'calendar', 'daily_brief', 'travel_time']);
+const DEFAULT_CONTEXT_REFRESH_MINUTES = 180;
+const EVENT_HINT_RULE_CATEGORIES = new Set(['generic', 'medical', 'prep', 'travel', 'pickup']);
+const EVENT_HINT_RULE_ORIGIN_TYPES = new Set(['home', 'custom', 'saved_place', 'member_work', 'member_school']);
+const EVENT_HINT_RULE_ROUTE_MODES = new Set(['car', 'bike', 'walk', 'public_transport']);
+
+const resolveContextRefreshMinutes = (contextConfig = {}) => {
+  const explicitMinutes = Number(contextConfig?.refreshMinutes);
+  if (Number.isFinite(explicitMinutes) && explicitMinutes > 0) {
+    return Math.round(explicitMinutes);
+  }
+
+  const legacyHours = Number(contextConfig?.refreshHours);
+  if (Number.isFinite(legacyHours) && legacyHours > 0) {
+    return Math.round(legacyHours * 60);
+  }
+
+  return DEFAULT_CONTEXT_REFRESH_MINUTES;
+};
 
 const buildDefaultModuleConfig = (type) => {
   switch (type) {
@@ -128,10 +146,11 @@ const DEFAULT_CONFIG = {
       selectedCalendarIds: [],
     },
     context: {
-      refreshHours: 3,
+      refreshMinutes: DEFAULT_CONTEXT_REFRESH_MINUTES,
       tripLookaheadDays: 14,
       birthdayLookaheadDays: 10,
       usefulLocationWhitelist: [],
+      eventHintRules: [],
       briefCalendarMode: 'exclude_selected',
       briefIncludedCalendarIds: [],
       briefExcludedCalendarIds: [],
@@ -151,7 +170,6 @@ const DEFAULT_CONFIG = {
       provider: 'openai',
       model: 'gpt-5-mini',
       baseUrl: '',
-      refreshHours: 3,
       privacyMode: 'cloud-redacted',
       suppressRoutineRecurringEvents: true,
     },
@@ -439,6 +457,30 @@ const collectGridLayoutModules = (gridLayouts, fallbackGridLayout) => {
 
 const sanitizeHomeAssistantUrl = (value = '') => value.toString().trim().replace(/\/+$/, '');
 
+const assertOptionalHttpUrl = (value, label) => {
+  const normalizedValue = typeof value === 'string' ? value.trim() : '';
+  if (!normalizedValue) {
+    return;
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(normalizedValue);
+  } catch (error) {
+    throw new Error(`${label} must be a full http:// or https:// URL, or empty.`);
+  }
+
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    throw new Error(`${label} must use http:// or https://.`);
+  }
+};
+
+const validateConfigForSave = (config) => {
+  assertOptionalHttpUrl(config?.services?.llm?.baseUrl, 'LLM Base URL');
+  assertOptionalHttpUrl(config?.services?.travel?.routingBaseUrl, 'OpenRouteService Base URL');
+  return config;
+};
+
 const fetchHomeAssistantEntities = async ({ url, token }) => {
   const normalizedUrl = sanitizeHomeAssistantUrl(url);
   const normalizedToken = typeof token === 'string' ? token.trim() : '';
@@ -573,6 +615,23 @@ const normalizeConfig = (rawConfig = {}) => {
     googleRoutesForAllModes: config.services.travel.googleRoutesForAllModes === true,
     refreshMinutes: Number(config.services.travel.refreshMinutes) || Number(routing.refreshMinutes) || 30,
   };
+  config.services.context = {
+    ...config.services.context,
+    refreshMinutes: resolveContextRefreshMinutes(rawConfig?.services?.context || config.services.context),
+    eventHintRules: normalizeEventHintRules(rawConfig?.services?.context?.eventHintRules ?? config.services.context.eventHintRules),
+  };
+  delete config.services.context.refreshHours;
+  config.services.llm = {
+    ...config.services.llm,
+    baseUrl: typeof config.services.llm?.baseUrl === 'string' ? config.services.llm.baseUrl.trim() : '',
+  };
+  delete config.services.llm.refreshHours;
+  config.services.travel.routingBaseUrl = typeof config.services.travel.routingBaseUrl === 'string'
+    ? config.services.travel.routingBaseUrl.trim()
+    : '';
+  config.services.routing.baseUrl = typeof config.services.routing.baseUrl === 'string'
+    ? config.services.routing.baseUrl.trim()
+    : '';
 
   return config;
 };
@@ -896,7 +955,7 @@ const extractSecretsFromConfig = (config, currentSecrets) => {
 
 const saveConfig = async (rawConfig) => {
   const currentSecrets = await readSecrets();
-  const { config, secrets } = extractSecretsFromConfig(normalizeConfig(rawConfig), currentSecrets);
+  const { config, secrets } = extractSecretsFromConfig(validateConfigForSave(normalizeConfig(rawConfig)), currentSecrets);
   await writeSecrets(secrets);
   await fs.writeJson(CONFIG_PATH, config, { spaces: 2 });
   return sanitizeConfigForClient(config, secrets);
@@ -2216,6 +2275,126 @@ const normalizeMatchText = (value = '') => value
   .toLowerCase()
   .normalize('NFD')
   .replace(/[\u0300-\u036f]/g, '');
+
+const normalizeEventHintRuleCategory = (value = '') => {
+  const normalized = `${value}`.trim().toLowerCase();
+  return EVENT_HINT_RULE_CATEGORIES.has(normalized) ? normalized : 'generic';
+};
+
+const normalizeEventHintRuleOriginType = (value = '') => {
+  const normalized = `${value}`.trim().toLowerCase();
+  return EVENT_HINT_RULE_ORIGIN_TYPES.has(normalized) ? normalized : 'home';
+};
+
+const normalizeEventHintRuleRouteMode = (value = '') => {
+  switch (`${value}`.trim().toLowerCase()) {
+    case 'bike':
+    case 'cycling':
+      return 'bike';
+    case 'walk':
+    case 'walking':
+      return 'walk';
+    case 'public_transport':
+    case 'transit':
+    case 'train':
+      return 'public_transport';
+    default:
+      return 'car';
+  }
+};
+
+const normalizeEventHintKeywords = (value) => {
+  const rawEntries = Array.isArray(value)
+    ? value
+    : `${value || ''}`.split(/[\n,]/g);
+
+  return Array.from(new Set(rawEntries
+    .map((entry) => entry?.toString().trim())
+    .filter(Boolean)));
+};
+
+const normalizeEventHintRules = (rawRules = []) => (Array.isArray(rawRules) ? rawRules : [])
+  .map((rule, index) => {
+    const arriveEarlyMinutes = Number(rule?.arriveEarlyMinutes);
+    return {
+      id: typeof rule?.id === 'string' && rule.id.trim() ? rule.id.trim() : `event_hint_${index + 1}`,
+      enabled: rule?.enabled !== false,
+      label: typeof rule?.label === 'string' ? rule.label.trim() : '',
+      keywords: normalizeEventHintKeywords(rule?.keywords),
+      category: normalizeEventHintRuleCategory(rule?.category),
+      personLabel: typeof rule?.personLabel === 'string' ? rule.personLabel.trim() : '',
+      locationLabel: typeof rule?.locationLabel === 'string' ? rule.locationLabel.trim() : '',
+      locationAddress: typeof rule?.locationAddress === 'string' ? rule.locationAddress.trim() : '',
+      additionalInfo: typeof rule?.additionalInfo === 'string' ? rule.additionalInfo.trim() : '',
+      arriveEarlyMinutes: Number.isFinite(arriveEarlyMinutes) && arriveEarlyMinutes > 0
+        ? Math.min(480, Math.round(arriveEarlyMinutes))
+        : 0,
+      originType: normalizeEventHintRuleOriginType(rule?.originType),
+      originReferenceId: typeof rule?.originReferenceId === 'string' ? rule.originReferenceId.trim() : '',
+      originLabel: typeof rule?.originLabel === 'string' ? rule.originLabel.trim() : '',
+      originAddress: typeof rule?.originAddress === 'string' ? rule.originAddress.trim() : '',
+      transportMode: normalizeEventHintRuleRouteMode(rule?.transportMode),
+    };
+  });
+
+const mapEventHintRuleToEnrichmentType = (category = 'generic') => {
+  switch (normalizeEventHintRuleCategory(category)) {
+    case 'medical':
+    case 'prep':
+    case 'pickup':
+      return 'household_prep';
+    case 'travel':
+      return 'travel';
+    default:
+      return 'generic';
+  }
+};
+
+const findMatchingEventHintRule = (event, config) => {
+  const titleText = normalizeMatchText(event?.title || '');
+  if (!titleText) {
+    return null;
+  }
+
+  const rules = normalizeEventHintRules(config?.services?.context?.eventHintRules);
+  const matches = rules
+    .filter((rule) => rule.enabled !== false && rule.keywords.length > 0)
+    .map((rule) => {
+      const matchedKeyword = rule.keywords
+        .map((keyword) => ({
+          original: keyword,
+          normalized: normalizeMatchText(keyword),
+        }))
+        .filter((keyword) => keyword.normalized && titleText.includes(keyword.normalized))
+        .sort((left, right) => right.normalized.length - left.normalized.length)[0];
+
+      if (!matchedKeyword) {
+        return null;
+      }
+
+      const score = (matchedKeyword.normalized.length * 10)
+        + (rule.locationAddress ? 4 : 0)
+        + (rule.additionalInfo ? 3 : 0)
+        + (rule.personLabel ? 2 : 0)
+        + (rule.arriveEarlyMinutes > 0 ? 1 : 0);
+
+      return {
+        ...rule,
+        matchedKeyword: matchedKeyword.original,
+        enrichmentType: mapEventHintRuleToEnrichmentType(rule.category),
+        score,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return (right.label || right.matchedKeyword || '').length - (left.label || left.matchedKeyword || '').length;
+    });
+
+  return matches[0] || null;
+};
 
 const inferTripTravelerLabel = (sourceEvents, household) => {
   const members = Array.isArray(household?.members) ? household.members : [];
@@ -4638,29 +4817,6 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, trave
     });
   }
 
-  if (highlightEventContext) {
-    const start = new Date(highlightEventContext.start);
-    const dayOffset = diffDays(start, new Date());
-    const whenLabel = dayOffset <= 0
-      ? `today${highlightEventContext.isAllDay ? '' : ` at ${start.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`}`
-      : (dayOffset === 1
-        ? `tomorrow${highlightEventContext.isAllDay ? '' : ` at ${start.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`}`
-        : `on ${formatDateLabel(highlightEventContext.start)}`);
-    const prepLike = /\b(setup|prep|preparation|conference|meeting|presentation|overview|tickets?|concert|show|festival|dinner|lunch)\b/i;
-    if (prepLike.test(highlightEventContext.title)) {
-      candidates.push({
-        id: 'highlight_event',
-        kind: 'highlight',
-        score: Math.max(58, highlightEventContext.score + 18),
-        headline: 'Daily brief',
-        householdView: `${highlightEventContext.title} is coming up ${whenLabel}.`,
-        bullets: uniqueTexts([
-          `Think about ${highlightEventContext.title} ${whenLabel}.`,
-        ]),
-      });
-    }
-  }
-
   const skipNextEventBullet = nextEvent && (
     nextEvent.id === visitorContext?.sourceEventId
     || nextEvent.id === householdEventContext?.sourceEventId
@@ -4737,10 +4893,10 @@ const buildNextEventHouseholdView = (event) => {
   }
 
   if (ONLINE_EVENT_PATTERN.test(title)) {
-    return `${title} ${whenLabel}${timeLabel}.`;
+    return '';
   }
 
-  return dayOffset <= 1 ? `${title} ${whenLabel}${timeLabel}.` : '';
+  return '';
 };
 
 const buildDailyBrief = (events, activeTrip, nextEvent, recentTrip, travelHeadsUpContext, visitorContext, birthdayContext, commuteContext, householdEventContext, config) => {
@@ -4763,7 +4919,7 @@ const buildDailyBrief = (events, activeTrip, nextEvent, recentTrip, travelHeadsU
 
   return {
     headline: primary?.headline || 'Daily brief',
-    bullets: bullets.length > 0 ? bullets : (events.length > 1 ? [`${events.length} upcoming calendar items are on the mirror.`] : []),
+    bullets,
     householdView: primary?.householdView || '',
     items,
   };
@@ -4907,6 +5063,7 @@ const LLM_ENRICHMENT_TYPES = new Set([
 const TICKET_SIGNAL_PATTERN = /\b(ticket|tickets|presale|pre-sale|on sale|onsale|vorverkauf)\b/i;
 const CONCERT_SIGNAL_PATTERN = /\b(concert|show|gig|tour|festival|live)\b/i;
 const HOUSEHOLD_PREP_SIGNAL_PATTERN = /\b(setup|prep|preparation|conference|meeting|presentation|overview|delivery|pickup)\b/i;
+const MEDICAL_SIGNAL_PATTERN = /\b(doctor|arzt|ambulanz|clinic|klinik|hospital|krankenhaus|physio|therapy|therapie|infusion|tysabri)\b/i;
 const URL_PATTERN = /https?:\/\/[^\s)]+/gi;
 const TICKET_SELLER_PATTERNS = [
   { label: 'Ticketmaster', pattern: /\bticketmaster\b/i },
@@ -4969,11 +5126,209 @@ const detectSuggestedEnrichmentType = (event) => {
   return 'generic';
 };
 
-const redactEventForLlmSelection = (event, privacyMode) => ({
-  id: event.id,
-  suggestedEnrichmentType: detectSuggestedEnrichmentType(event),
-  ...redactEventForLlm(event, privacyMode),
+const getEventDayKey = (value = '') => {
+  const normalized = `${value || ''}`.trim();
+  return normalized ? normalized.slice(0, 10) : '';
+};
+
+const getEventScheduleSignals = (event, sourceEvents = []) => {
+  const dayKey = getEventDayKey(event?.start);
+  if (!dayKey) {
+    return {
+      sameDayCount: 0,
+      sameCalendarDayCount: 0,
+      gapBeforeMinutes: null,
+      gapAfterMinutes: null,
+      previousTitle: '',
+      nextTitle: '',
+      tightlyClustered: false,
+    };
+  }
+
+  const sameDayEvents = sourceEvents
+    .filter((candidate) => getEventDayKey(candidate?.start) === dayKey)
+    .sort((left, right) => new Date(left.start) - new Date(right.start));
+  const sameCalendarDayEvents = sameDayEvents.filter((candidate) => candidate.calendarId === event.calendarId);
+  const currentIndex = sameDayEvents.findIndex((candidate) => candidate.id === event.id);
+  const previousEvent = currentIndex > 0 ? sameDayEvents[currentIndex - 1] : null;
+  const nextEvent = currentIndex >= 0 && currentIndex < (sameDayEvents.length - 1) ? sameDayEvents[currentIndex + 1] : null;
+  const gapBeforeMinutes = previousEvent
+    ? Math.round((new Date(event.start).getTime() - new Date(previousEvent.end).getTime()) / 60000)
+    : null;
+  const gapAfterMinutes = nextEvent
+    ? Math.round((new Date(nextEvent.start).getTime() - new Date(event.end).getTime()) / 60000)
+    : null;
+
+  return {
+    sameDayCount: sameDayEvents.length,
+    sameCalendarDayCount: sameCalendarDayEvents.length,
+    gapBeforeMinutes,
+    gapAfterMinutes,
+    previousTitle: previousEvent?.title || '',
+    nextTitle: nextEvent?.title || '',
+    tightlyClustered: Boolean(
+      (gapBeforeMinutes !== null && gapBeforeMinutes >= 0 && gapBeforeMinutes <= 75)
+      || (gapAfterMinutes !== null && gapAfterMinutes >= 0 && gapAfterMinutes <= 75)
+    ),
+  };
+};
+
+const getEventSpanDays = (event) => {
+  const startMs = new Date(event?.start).getTime();
+  const endMs = new Date(event?.end).getTime();
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) {
+    return 1;
+  }
+
+  const spanDays = (endMs - startMs) / 86400000;
+  if (event?.isAllDay) {
+    return Math.max(1, Math.round(spanDays));
+  }
+
+  return Math.max(1, Math.ceil(spanDays));
+};
+
+const buildSelectionSignals = (event, sourceEvents = [], config = null) => {
+  const combinedText = getEventCombinedText(event);
+  const urlMatches = Array.from(new Set(((combinedText || '').match(URL_PATTERN) || []).map((entry) => entry.trim())));
+  const startMs = new Date(event.start).getTime();
+  const endMs = new Date(event.end).getTime();
+  const spanDays = getEventSpanDays(event);
+  const eventHintRule = findMatchingEventHintRule(event, config);
+  const durationHours = (!Number.isNaN(startMs) && !Number.isNaN(endMs))
+    ? Math.max(0, Math.round(((endMs - startMs) / 3600000) * 10) / 10)
+    : 0;
+  const startsInHours = !Number.isNaN(startMs)
+    ? Math.max(0, Math.round(((startMs - Date.now()) / 3600000) * 10) / 10)
+    : null;
+
+  return {
+    hasLocation: Boolean((event.location || '').trim()),
+    hasDescription: Boolean((event.description || '').trim()),
+    hasUrl: urlMatches.length > 0,
+    startsInHours,
+    durationHours,
+    spanDays,
+    isMultiDay: spanDays > 1,
+    isRoutine: isLowValueRoutineEvent(event),
+    isMedical: MEDICAL_SIGNAL_PATTERN.test(combinedText) || eventHintRule?.category === 'medical',
+    isOnline: ONLINE_EVENT_PATTERN.test(combinedText),
+    missingDetailLevel: [
+      !((event.location || '').trim()),
+      !((event.description || '').trim()),
+      urlMatches.length === 0,
+    ].filter(Boolean).length,
+    schedule: getEventScheduleSignals(event, sourceEvents),
+    eventHintRule: eventHintRule
+      ? {
+        id: eventHintRule.id,
+        label: eventHintRule.label,
+        matchedKeyword: eventHintRule.matchedKeyword,
+        category: eventHintRule.category,
+        enrichmentType: eventHintRule.enrichmentType,
+        hasLocationHint: Boolean(eventHintRule.locationLabel || eventHintRule.locationAddress),
+        hasRoutePlan: Boolean(eventHintRule.locationAddress),
+        personLabel: eventHintRule.personLabel,
+      }
+      : null,
+  };
+};
+
+const buildHeuristicLlmSelection = (sourceEvents, config = null) => ({
+  items: sourceEvents.map((event) => {
+    const enrichmentType = detectSuggestedEnrichmentType(event);
+    const signals = buildSelectionSignals(event, sourceEvents, config);
+    const hintEnrichmentType = signals.eventHintRule?.enrichmentType || null;
+    const interesting = !signals.isRoutine && scoreEventInterest(event) >= 18;
+    const clearlyNeedsExtraContext = Boolean(
+      hintEnrichmentType
+      || enrichmentType === 'travel'
+      || enrichmentType === 'route_weather'
+      || enrichmentType === 'delivery'
+      || enrichmentType === 'ticket_sale'
+      || enrichmentType === 'concert'
+      || (enrichmentType === 'household_prep' && (signals.schedule.tightlyClustered || signals.missingDetailLevel >= 2))
+      || (signals.isMedical && signals.missingDetailLevel >= 1)
+      || (signals.isMultiDay && signals.missingDetailLevel >= 2)
+    );
+
+    return {
+      eventId: event.id,
+      decision: clearlyNeedsExtraContext ? 'needs_enrichment' : (interesting ? 'calendar_only' : 'ignore'),
+      enrichmentType: hintEnrichmentType
+        || (clearlyNeedsExtraContext && enrichmentType === 'generic' && signals.isMedical
+          ? 'household_prep'
+          : enrichmentType),
+      why: clearlyNeedsExtraContext
+        ? (signals.eventHintRule
+          ? `matched_event_hint_rule:${signals.eventHintRule.matchedKeyword}`
+          : 'heuristic_added_value_detected')
+        : (interesting ? 'calendar_is_already_sufficient' : 'not_useful_for_brief'),
+    };
+  }),
 });
+
+const mergeLlmSelectionWithHeuristics = (llmSelection, sourceEvents, config = null) => {
+  const heuristicSelection = buildHeuristicLlmSelection(sourceEvents, config);
+  if (!llmSelection?.items?.length) {
+    return heuristicSelection;
+  }
+
+  const heuristicById = new Map(heuristicSelection.items.map((item) => [item.eventId, item]));
+  const llmById = new Map(llmSelection.items.map((item) => [item.eventId, item]));
+
+  return {
+    items: sourceEvents.map((event) => {
+      const llmItem = llmById.get(event.id);
+      const heuristicItem = heuristicById.get(event.id);
+      if (!llmItem) {
+        return heuristicItem;
+      }
+
+      if (heuristicItem?.decision === 'needs_enrichment' && llmItem.decision !== 'needs_enrichment') {
+        return heuristicItem;
+      }
+
+      if (llmItem.decision === 'needs_enrichment' && llmItem.enrichmentType === 'generic' && heuristicItem?.enrichmentType && heuristicItem.enrichmentType !== 'generic') {
+        return {
+          ...llmItem,
+          enrichmentType: heuristicItem.enrichmentType,
+          why: llmItem.why || heuristicItem.why,
+        };
+      }
+
+      return llmItem;
+    }).filter(Boolean),
+  };
+};
+
+const redactEventForLlmSelection = (event, privacyMode, sourceEvents = [], config = null) => {
+  const signals = buildSelectionSignals(event, sourceEvents, config);
+  return {
+    id: event.id,
+    suggestedEnrichmentType: detectSuggestedEnrichmentType(event),
+    ...redactEventForLlm(event, privacyMode),
+    selectionSignals: {
+      startsInHours: signals.startsInHours,
+      durationHours: signals.durationHours,
+      hasLocation: signals.hasLocation,
+      hasDescription: signals.hasDescription,
+      hasUrl: signals.hasUrl,
+      isMultiDay: signals.isMultiDay,
+      spanDays: signals.spanDays,
+      isRoutine: signals.isRoutine,
+      isMedical: signals.isMedical,
+      isOnline: signals.isOnline,
+      missingDetailLevel: signals.missingDetailLevel,
+      sameDayCount: signals.schedule.sameDayCount,
+      sameCalendarDayCount: signals.schedule.sameCalendarDayCount,
+      gapBeforeMinutes: signals.schedule.gapBeforeMinutes,
+      gapAfterMinutes: signals.schedule.gapAfterMinutes,
+      tightlyClustered: signals.schedule.tightlyClustered,
+    },
+    matchedEventHintRule: signals.eventHintRule,
+  };
+};
 
 const buildLlmSelectorPrompt = ({ events, activeTrip, nextEvent, config }) => {
   const locale = config.system?.displayLocale === 'de' ? 'de' : 'en';
@@ -5009,7 +5364,9 @@ const buildLlmSelectorPrompt = ({ events, activeTrip, nextEvent, config }) => {
     '- Decide whether each event needs additional value beyond what the calendar already shows.',
     '- Mark events as "calendar_only" if the calendar entry itself is enough and no extra facts are likely needed.',
     '- Mark events as "needs_enrichment" only when extra information would clearly improve the mirror.',
-    '- Prefer ticket drops, travel, route/weather-sensitive plans, deliveries, and events that likely need outside context.',
+    '- Prefer "needs_enrichment" for travel, route/weather-sensitive plans, deliveries, prep-heavy meetings, and events with missing location/link/details.',
+    '- Matched household event hint rules contain verified user-entered context and usually deserve enrichment.',
+    '- Tight same-day schedules, stacked calendar days, medical appointments with missing details, and multi-day stays usually benefit from enrichment.',
     '- Ignore routine lessons, repeated appointments, and simple reminders.',
     '- Do not write user-facing mirror copy.',
     '- Output one JSON object and nothing else.',
@@ -5065,20 +5422,7 @@ const validateLlmSelection = (payload, sourceEvents) => {
   return { items };
 };
 
-const buildFallbackLlmSelection = (sourceEvents) => ({
-  items: sourceEvents.map((event) => {
-    const enrichmentType = detectSuggestedEnrichmentType(event);
-    const interesting = !isLowValueRoutineEvent(event) && scoreEventInterest(event) >= 18;
-    return {
-      eventId: event.id,
-      decision: interesting && enrichmentType !== 'generic' ? 'needs_enrichment' : (interesting ? 'calendar_only' : 'ignore'),
-      enrichmentType,
-      why: interesting && enrichmentType !== 'generic'
-        ? `detected_${enrichmentType}`
-        : (interesting ? 'calendar_is_already_sufficient' : 'not_useful_for_brief'),
-    };
-  }),
-});
+const buildFallbackLlmSelection = (sourceEvents, config = null) => buildHeuristicLlmSelection(sourceEvents, config);
 
 const extractTicketSeller = (text) => {
   const match = TICKET_SELLER_PATTERNS.find((entry) => entry.pattern.test(text || ''));
@@ -5103,6 +5447,11 @@ const extractVenueHint = (location = '') => {
   const lines = location.split('\n').map((line) => line.trim()).filter(Boolean);
   const candidate = lines.find((line) => /[A-Za-zÄÖÜäöü]/.test(line) && !STREET_ADDRESS_PATTERN.test(line));
   return candidate || '';
+};
+
+const extractTitlePlaceHint = (title = '') => {
+  const match = title.match(/\bin\s+([A-ZÄÖÜ][\p{L}-]+(?:\s+[A-ZÄÖÜ][\p{L}-]+){0,2})/u);
+  return match ? match[1].trim() : '';
 };
 
 const buildInsightFactsFromContext = (event, activeTrip, recentTrip, commuteContext, householdEventContext) => {
@@ -5161,6 +5510,8 @@ const buildInsightFactsFromEventDetails = (event, enrichmentType) => {
   const cities = extractCities(combinedText);
   const venue = extractVenueHint(event.location || '');
   const seller = extractTicketSeller(combinedText) || extractTicketSeller(urlDomains.join(' '));
+  const titlePlaceHint = extractTitlePlaceHint(event.title || '');
+  const signals = buildSelectionSignals(event, []);
 
   if (enrichmentType === 'ticket_sale') {
     const addedFacts = uniqueTexts([
@@ -5184,7 +5535,201 @@ const buildInsightFactsFromEventDetails = (event, enrichmentType) => {
     return addedFacts.length > 0 ? { type: 'concert', sources: ['event_metadata'], addedFacts } : null;
   }
 
+  if (['travel', 'route_weather', 'delivery', 'household_prep', 'generic'].includes(enrichmentType)) {
+    const addedFacts = uniqueTexts([
+      !signals.hasLocation && !signals.hasDescription && !signals.hasUrl
+        ? 'Calendar entry has no location, notes, or link yet.'
+        : '',
+      !signals.hasLocation && signals.isMedical
+        ? 'Location is missing, so arrival planning may need a manual check.'
+        : '',
+      signals.isOnline && !signals.hasUrl
+        ? 'This looks like an online event, but no meeting link is attached.'
+        : '',
+      signals.isMultiDay
+        ? `This spans about ${signals.spanDays} days.`
+        : '',
+      venue ? `Venue hint: ${venue}.` : '',
+      titlePlaceHint ? `Place hint: ${titlePlaceHint}.` : '',
+      cities.length ? `Known city hints: ${cities.slice(0, 3).join(', ')}.` : '',
+      urlDomains.length ? `Source links mention: ${urlDomains.slice(0, 2).join(', ')}.` : '',
+    ]);
+
+    return addedFacts.length > 0 ? { type: enrichmentType, sources: ['event_metadata'], addedFacts } : null;
+  }
+
   return null;
+};
+
+const buildInsightFactsFromScheduleContext = (event, sourceEvents) => {
+  const schedule = getEventScheduleSignals(event, sourceEvents);
+  const addedFacts = uniqueTexts([
+    schedule.sameDayCount >= 3 ? `There are ${schedule.sameDayCount} calendar items on that day.` : '',
+    schedule.sameCalendarDayCount >= 2 && event.calendarSummary
+      ? `${event.calendarSummary} has ${schedule.sameCalendarDayCount} items that day.`
+      : '',
+    schedule.gapBeforeMinutes !== null && schedule.gapBeforeMinutes >= 0 && schedule.gapBeforeMinutes <= 75 && schedule.previousTitle
+      ? `Only ${schedule.gapBeforeMinutes} min remain after ${schedule.previousTitle} before this starts.`
+      : '',
+    schedule.gapAfterMinutes !== null && schedule.gapAfterMinutes >= 0 && schedule.gapAfterMinutes <= 75 && schedule.nextTitle
+      ? `Only ${schedule.gapAfterMinutes} min remain after this before ${schedule.nextTitle}.`
+      : '',
+  ]);
+
+  return addedFacts.length > 0
+    ? { type: 'household_prep', sources: ['schedule_context'], addedFacts }
+    : null;
+};
+
+const formatEventHintClockTime = (timestamp, config) => {
+  if (!Number.isFinite(timestamp)) {
+    return '';
+  }
+
+  try {
+    return new Intl.DateTimeFormat(
+      config?.system?.displayLocale === 'de' ? 'de-DE' : 'en-GB',
+      {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: config?.system?.timezone || 'UTC',
+      },
+    ).format(new Date(timestamp));
+  } catch (error) {
+    return new Date(timestamp).toLocaleTimeString('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  }
+};
+
+const describeEventHintCategory = (category = 'generic') => {
+  switch (normalizeEventHintRuleCategory(category)) {
+    case 'medical':
+      return 'This is usually a medical treatment or appointment.';
+    case 'prep':
+      return 'This event usually needs preparation beforehand.';
+    case 'travel':
+      return 'This event usually involves travel or an overnight stay.';
+    case 'pickup':
+      return 'This event usually involves a pickup or collection.';
+    default:
+      return '';
+  }
+};
+
+const buildInsightFactsFromEventHintRule = (eventHintRule) => {
+  if (!eventHintRule) {
+    return null;
+  }
+
+  const addedFacts = uniqueTexts([
+    eventHintRule.matchedKeyword ? `Matched household keyword: ${eventHintRule.matchedKeyword}.` : '',
+    eventHintRule.personLabel ? `${eventHintRule.personLabel} is the main person for this event.` : '',
+    describeEventHintCategory(eventHintRule.category),
+    eventHintRule.locationLabel ? `Known destination: ${eventHintRule.locationLabel}.` : '',
+    eventHintRule.locationAddress ? `Known destination address: ${eventHintRule.locationAddress}.` : '',
+    eventHintRule.arriveEarlyMinutes > 0 ? `Plan to arrive about ${eventHintRule.arriveEarlyMinutes} min early.` : '',
+    eventHintRule.additionalInfo ? `User-provided context: ${eventHintRule.additionalInfo}.` : '',
+  ]);
+
+  return addedFacts.length > 0
+    ? { type: eventHintRule.enrichmentType, sources: ['event_hint_rule'], addedFacts }
+    : null;
+};
+
+const buildEventHintRouteFacts = async ({
+  event,
+  eventHintRule,
+  household,
+  config,
+  routingConfig,
+  routingSecrets,
+  geocodeCache,
+  routingCache,
+}) => {
+  if (!eventHintRule || event?.isAllDay || !eventHintRule.locationAddress) {
+    return null;
+  }
+
+  const startMs = new Date(event.start).getTime();
+  if (Number.isNaN(startMs)) {
+    return null;
+  }
+
+  const origin = await resolveTravelAnchorPlace({
+    referenceType: eventHintRule.originType || 'home',
+    referenceId: eventHintRule.originReferenceId || '',
+    label: eventHintRule.originLabel || '',
+    address: eventHintRule.originAddress || '',
+    household,
+    config,
+    geocodeCache,
+    routingConfig,
+    routingSecrets,
+  });
+  const destination = await resolveTravelAnchorPlace({
+    referenceType: 'custom',
+    label: eventHintRule.locationLabel || event.title || eventHintRule.matchedKeyword || 'Destination',
+    address: eventHintRule.locationAddress || '',
+    household,
+    config,
+    geocodeCache,
+    routingConfig,
+    routingSecrets,
+  });
+
+  if (!origin || !destination) {
+    return null;
+  }
+
+  const mode = normalizeTravelMode(eventHintRule.transportMode || 'car');
+  const route = await getRouteEstimate({
+    origin: hasResolvedLocation(origin) ? origin.location : null,
+    destination: hasResolvedLocation(destination) ? destination.location : null,
+    originPlace: origin,
+    destinationPlace: destination,
+    routingConfig,
+    routingSecrets,
+    routingCache,
+    mode,
+  });
+
+  if (!route?.durationMinutes) {
+    return null;
+  }
+
+  const travelMinutes = Math.max(1, Math.round(route.durationMinutes));
+  const arrivalBufferMinutes = Number(eventHintRule.arriveEarlyMinutes) || 0;
+  const leaveByTimestamp = startMs - ((travelMinutes + arrivalBufferMinutes) * 60000);
+  const routeModeLabel = mode === 'public_transport'
+    ? 'public transport'
+    : mode;
+  const originLabel = origin.label || household?.home?.label || 'origin';
+  const destinationLabel = destination.label || eventHintRule.locationLabel || event.title || 'destination';
+  const transitLines = mode === 'public_transport'
+    ? uniqueTexts([
+      ...buildTravelLineDetails(route, mode),
+      ...buildTravelLineDetailsDetailed(route, mode)
+        .map((entry) => [entry.vehicleType, entry.label].filter(Boolean).join(' ').trim()),
+    ]).slice(0, 3)
+    : [];
+
+  const addedFacts = uniqueTexts([
+    `Estimated ${routeModeLabel} from ${originLabel} to ${destinationLabel} takes about ${travelMinutes} min.`,
+    leaveByTimestamp > 0
+      ? (arrivalBufferMinutes > 0
+        ? `Leave around ${formatEventHintClockTime(leaveByTimestamp, config)} to arrive about ${arrivalBufferMinutes} min early.`
+        : `Leave around ${formatEventHintClockTime(leaveByTimestamp, config)} for on-time arrival.`)
+      : '',
+    transitLines.length > 0 ? `Transit lines mention: ${transitLines.join(', ')}.` : '',
+  ]);
+
+  return addedFacts.length > 0
+    ? { type: eventHintRule.enrichmentType, sources: ['event_hint_route'], addedFacts }
+    : null;
 };
 
 const buildEnrichedBriefInsights = ({
@@ -5194,6 +5739,7 @@ const buildEnrichedBriefInsights = ({
   recentTrip,
   commuteContext,
   householdEventContext,
+  config = null,
 }) => {
   const eventMap = new Map(sourceEvents.map((event) => [event.id, event]));
   const insightDebug = [];
@@ -5208,16 +5754,23 @@ const buildEnrichedBriefInsights = ({
       }
 
       const suggestedType = item.enrichmentType === 'generic' ? detectSuggestedEnrichmentType(event) : item.enrichmentType;
+      const eventHintRule = findMatchingEventHintRule(event, config);
       const contextual = buildInsightFactsFromContext(event, activeTrip, recentTrip, commuteContext, householdEventContext);
       const metadata = buildInsightFactsFromEventDetails(event, suggestedType);
+      const schedule = buildInsightFactsFromScheduleContext(event, sourceEvents);
+      const eventHint = buildInsightFactsFromEventHintRule(eventHintRule);
       const addedFacts = uniqueTexts([
         ...(contextual?.addedFacts || []),
         ...(metadata?.addedFacts || []),
+        ...(schedule?.addedFacts || []),
+        ...(eventHint?.addedFacts || []),
       ]);
-      const resolvedType = metadata?.type || contextual?.type || suggestedType;
+      const resolvedType = eventHint?.type || metadata?.type || contextual?.type || suggestedType;
       const sources = Array.from(new Set([
         ...(contextual?.sources || []),
         ...(metadata?.sources || []),
+        ...(schedule?.sources || []),
+        ...(eventHint?.sources || []),
       ]));
 
       const insight = {
@@ -5229,6 +5782,14 @@ const buildEnrichedBriefInsights = ({
         why: item.why,
         addedFacts,
         sources,
+        eventHintRule: eventHintRule
+          ? {
+            id: eventHintRule.id,
+            label: eventHintRule.label,
+            matchedKeyword: eventHintRule.matchedKeyword,
+            category: eventHintRule.category,
+          }
+          : null,
       };
 
       if (addedFacts.length > 0) {
@@ -5244,6 +5805,73 @@ const buildEnrichedBriefInsights = ({
     });
 
   return { insights, insightDebug };
+};
+
+const augmentInsightsWithEventHintRoutes = async ({
+  insights,
+  insightDebug,
+  sourceEvents,
+  config,
+  household,
+  routingConfig,
+  routingSecrets,
+  geocodeCache,
+  routingCache,
+}) => {
+  if (!Array.isArray(insights) || insights.length === 0) {
+    return { insights, insightDebug };
+  }
+
+  const eventMap = new Map(sourceEvents.map((event) => [event.id, event]));
+  const routeFactsByEventId = new Map();
+
+  for (const insight of insights) {
+    const event = eventMap.get(insight.eventId);
+    const eventHintRule = findMatchingEventHintRule(event, config);
+    const routeFacts = await buildEventHintRouteFacts({
+      event,
+      eventHintRule,
+      household,
+      config,
+      routingConfig,
+      routingSecrets,
+      geocodeCache,
+      routingCache,
+    });
+
+    if (routeFacts) {
+      routeFactsByEventId.set(insight.eventId, routeFacts);
+    }
+  }
+
+  if (routeFactsByEventId.size === 0) {
+    return { insights, insightDebug };
+  }
+
+  const mergeFacts = (entry) => {
+    const routeFacts = routeFactsByEventId.get(entry.eventId);
+    if (!routeFacts) {
+      return entry;
+    }
+
+    return {
+      ...entry,
+      enrichmentType: routeFacts.type || entry.enrichmentType,
+      addedFacts: uniqueTexts([
+        ...(entry.addedFacts || []),
+        ...(routeFacts.addedFacts || []),
+      ]),
+      sources: Array.from(new Set([
+        ...(entry.sources || []),
+        ...(routeFacts.sources || []),
+      ])),
+    };
+  };
+
+  return {
+    insights: insights.map(mergeFacts),
+    insightDebug: Array.isArray(insightDebug) ? insightDebug.map(mergeFacts) : insightDebug,
+  };
 };
 
 const buildLlmComposerPrompt = ({ insights, config }) => {
@@ -5264,10 +5892,11 @@ const buildLlmComposerPrompt = ({ insights, config }) => {
     'Rules:',
     '- Maximum 4 bullets.',
     '- Keep each bullet under 110 characters.',
-    '- Write all user-facing text in German.',
+    '- Write all user-facing text in the display locale. If displayLocale is de, the headline and bullets must be German.',
     '- Do not restate a calendar title/time by itself.',
     '- Mention an event only when you add specific value from addedFacts.',
     '- Use only facts from addedFacts. Do not guess or browse.',
+    '- Prefer actionable value such as missing details, tight schedule pressure, route/weather implications, or prep needs.',
     '- If no insight contains meaningful added value, return an empty bullets array and an empty householdView.',
     '- Output one JSON object and nothing else.',
     JSON.stringify(promptPayload, null, 2),
@@ -5628,11 +6257,16 @@ const generateLlmBrief = async ({
   calendarCache,
   config,
   secrets,
+  household,
   activeTrip,
   recentTrip,
   nextEvent,
   commuteContext,
   householdEventContext,
+  routingConfig,
+  routingSecrets,
+  geocodeCache,
+  routingCache,
   existingContext,
   force,
 }) => {
@@ -5651,10 +6285,10 @@ const generateLlmBrief = async ({
     };
   }
 
-  const refreshHours = Number(llmConfig.refreshHours) || 3;
+  const refreshMinutes = resolveContextRefreshMinutes(config.services.context);
   const existingLlm = existingContext?.llm;
   const isFresh = existingLlm?.updatedAt
-    && (Date.now() - new Date(existingLlm.updatedAt).getTime()) < (refreshHours * 3600000);
+    && (Date.now() - new Date(existingLlm.updatedAt).getTime()) < (refreshMinutes * 60000);
 
   if (!force && isFresh && existingLlm?.brief) {
     return existingLlm;
@@ -5735,7 +6369,7 @@ const generateLlmBrief = async ({
   });
   const selectedSourceEvents = getRelevantBriefEvents(calendarCache.events, config, 18);
   const selectorSourceEvents = selectedSourceEvents.length > 0 ? selectedSourceEvents : calendarCache.events.slice(0, 12);
-  const selectorInputEvents = selectorSourceEvents.map((event) => redactEventForLlmSelection(event, privacyMode));
+  const selectorInputEvents = selectorSourceEvents.map((event) => redactEventForLlmSelection(event, privacyMode, selectorSourceEvents, config));
   const selectorPrompt = buildLlmSelectorPrompt({ events: selectorInputEvents, activeTrip, nextEvent, config });
   let selectorRawText = '';
   let selectorProviderPayload = null;
@@ -5775,15 +6409,31 @@ const generateLlmBrief = async ({
     } catch (error) {
       parsedSelection = null;
     }
-    parsedSelection = parsedSelection || buildFallbackLlmSelection(selectorSourceEvents);
-    const { insights, insightDebug } = buildEnrichedBriefInsights({
+    parsedSelection = mergeLlmSelectionWithHeuristics(
+      parsedSelection || buildFallbackLlmSelection(selectorSourceEvents, config),
+      selectorSourceEvents,
+      config,
+    );
+    let { insights, insightDebug } = buildEnrichedBriefInsights({
       selections: parsedSelection,
       sourceEvents: selectorSourceEvents,
       activeTrip,
       recentTrip,
       commuteContext,
       householdEventContext,
+      config,
     });
+    ({ insights, insightDebug } = await augmentInsightsWithEventHintRoutes({
+      insights,
+      insightDebug,
+      sourceEvents: selectorSourceEvents,
+      config,
+      household,
+      routingConfig,
+      routingSecrets,
+      geocodeCache,
+      routingCache,
+    }));
     composerPrompt = buildLlmComposerPrompt({ insights, config });
 
     const composerResult = insights.length > 0
@@ -5920,6 +6570,7 @@ const buildContext = async (calendarCache, config, secrets, household, existingC
   const transportConfig = config.services.transport || {};
   const routingConfig = config.services.routing || {};
   const transportCache = await readTransportCache();
+  const geocodeCache = await readGeocodeCache();
   const routingCache = await readRoutingCache();
   const tripCandidates = enabledSignals.travel
     ? await buildTripTimelines(briefEvents, config, household, transportConfig, secrets.transport || {}, transportCache)
@@ -5942,8 +6593,7 @@ const buildContext = async (calendarCache, config, secrets, household, existingC
     ? await buildHouseholdEventContext(briefEvents, config, household, routingConfig, secrets.routing || {}, routingCache)
     : null;
   const highlightEventContext = enabledSignals.highlights ? buildHighlightEventContext(briefEvents, config) : null;
-  await writeRoutingCache(routingCache);
-  const refreshHours = Number(config.services.context.refreshHours) || 3;
+  const refreshMinutes = resolveContextRefreshMinutes(config.services.context);
   const llm = await generateLlmBrief({
     calendarCache: {
       ...calendarCache,
@@ -5951,14 +6601,21 @@ const buildContext = async (calendarCache, config, secrets, household, existingC
     },
     config,
     secrets,
+    household,
     activeTrip,
     recentTrip,
     nextEvent,
     commuteContext,
     householdEventContext,
+    routingConfig,
+    routingSecrets: secrets.routing || {},
+    geocodeCache,
+    routingCache,
     existingContext,
     force: forceLlm,
   });
+  await writeGeocodeCache(geocodeCache);
+  await writeRoutingCache(routingCache);
   const deterministicBrief = buildDailyBrief(
     briefEvents,
     activeTrip,
@@ -5987,7 +6644,7 @@ const buildContext = async (calendarCache, config, secrets, household, existingC
 
   const contextPayload = {
     updatedAt: new Date().toISOString(),
-    refreshHours,
+    refreshMinutes,
     activeTrip,
     recentTrip,
     visitorContext,
@@ -6005,7 +6662,7 @@ const buildContext = async (calendarCache, config, secrets, household, existingC
     stageSource: llm?.status || 'deterministic',
     config: {
       displayLocale: config.system?.displayLocale || 'en',
-      contextRefreshHours: refreshHours,
+      contextRefreshMinutes: refreshMinutes,
       llmEnabled: Boolean(config.services.llm?.enabled),
       llmProvider: config.services.llm?.provider || 'openai',
       llmModel: config.services.llm?.model || 'gpt-5-mini',
@@ -6105,7 +6762,10 @@ const ensureFreshContextCache = async () => {
 
   const calendarSyncedAt = calendarCache?.syncedAt ? new Date(calendarCache.syncedAt).getTime() : 0;
   const contextUpdatedAt = context?.updatedAt ? new Date(context.updatedAt).getTime() : 0;
-  const shouldRebuild = !context?.updatedAt || (calendarSyncedAt > contextUpdatedAt);
+  const refreshMinutes = resolveContextRefreshMinutes(config.services.context);
+  const shouldRebuild = !context?.updatedAt
+    || (calendarSyncedAt > contextUpdatedAt)
+    || (Date.now() - contextUpdatedAt) >= (refreshMinutes * 60000);
 
   if (!shouldRebuild) {
     return { context, config };
@@ -6158,11 +6818,11 @@ const syncCalendarData = async ({ forceContext = false } = {}) => {
   await fs.writeJson(CALENDAR_CACHE_PATH, calendarCache, { spaces: 2 });
 
   const existingContext = await readJsonIfExists(CONTEXT_CACHE_PATH, null);
-  const refreshHours = Number(config.services.context.refreshHours) || 3;
+  const refreshMinutes = resolveContextRefreshMinutes(config.services.context);
   const shouldRefreshContext = forceContext
     || calendarChanged
     || !existingContext?.updatedAt
-    || (Date.now() - new Date(existingContext.updatedAt).getTime()) >= (refreshHours * 3600000);
+    || (Date.now() - new Date(existingContext.updatedAt).getTime()) >= (refreshMinutes * 60000);
 
   if (shouldRefreshContext) {
     const context = await buildContext(calendarCache, config, secrets, household, existingContext, forceContext || calendarChanged);
@@ -6178,7 +6838,7 @@ const loadCalendarCache = async () => readJsonIfExists(CALENDAR_CACHE_PATH, DEFA
 
 const loadContextCache = async () => readJsonIfExists(CONTEXT_CACHE_PATH, {
   updatedAt: null,
-  refreshHours: 3,
+  refreshMinutes: DEFAULT_CONTEXT_REFRESH_MINUTES,
   activeTrip: null,
   recentTrip: null,
   visitorContext: null,
@@ -6265,16 +6925,34 @@ const startPowerManager = () => {
 };
 
 const startCalendarSyncLoop = () => {
+  let syncInFlight = false;
   const runSync = async () => {
+    if (syncInFlight) {
+      return;
+    }
+
+    syncInFlight = true;
     try {
+      const [config, cache] = await Promise.all([
+        readConfig(),
+        loadCalendarCache(),
+      ]);
+      const refreshMinutes = resolveContextRefreshMinutes(config.services.context);
+      const lastSyncedAt = cache?.syncedAt ? new Date(cache.syncedAt).getTime() : 0;
+      const shouldSync = !lastSyncedAt || (Date.now() - lastSyncedAt) >= (refreshMinutes * 60000);
+      if (!shouldSync) {
+        return;
+      }
       await syncCalendarData();
     } catch (error) {
       console.error('Calendar sync failed:', error.message);
+    } finally {
+      syncInFlight = false;
     }
   };
 
   runSync();
-  setInterval(runSync, 15 * 60 * 1000);
+  setInterval(runSync, 60 * 1000);
 };
 
 app.get('/api/config', async (req, res) => {
@@ -6719,9 +7397,11 @@ module.exports = {
   buildContextCandidates,
   buildDailyBrief,
   buildEnrichedBriefInsights,
+  buildHeuristicLlmSelection,
   estimateRouteFallback,
   filterEventsForDailyBrief,
   filterLlmBriefAgainstInsights,
+  findMatchingEventHintRule,
   findMatchingSavedPlace,
   inferTripAnchorFromEvent,
   llmBriefHasMeaningfulContent,
@@ -6729,5 +7409,7 @@ module.exports = {
   selectContextBrief,
   buildBriefItemsFromBrief,
   normalizeConfig,
+  resolveContextRefreshMinutes,
+  validateConfigForSave,
   validateLlmSelection,
 };

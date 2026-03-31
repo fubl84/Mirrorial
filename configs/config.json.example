@@ -27,16 +27,16 @@
       "selectedCalendarIds": []
     },
     "context": {
-      "refreshHours": 3,
+      "refreshMinutes": 180,
       "tripLookaheadDays": 14,
-      "usefulLocationWhitelist": []
+      "usefulLocationWhitelist": [],
+      "eventHintRules": []
     },
     "llm": {
       "enabled": false,
       "provider": "openai",
       "model": "gpt-5-mini",
       "baseUrl": "",
-      "refreshHours": 3,
       "privacyMode": "cloud-redacted",
       "suppressRoutineRecurringEvents": true
     },

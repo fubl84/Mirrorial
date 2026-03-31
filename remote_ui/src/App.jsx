@@ -64,6 +64,26 @@ const ROTATOR_ANIMATION_OPTIONS = [
   { id: 'lift', label: 'Lift' },
   { id: 'none', label: 'No animation' },
 ];
+const EVENT_HINT_CATEGORY_OPTIONS = [
+  { id: 'generic', label: 'General', description: 'Useful background facts for vague event titles.' },
+  { id: 'medical', label: 'Medical / therapy', description: 'Appointments, treatments, clinics, or hospital visits.' },
+  { id: 'prep', label: 'Meeting / prep', description: 'Events that usually need preparation or setup.' },
+  { id: 'travel', label: 'Travel / stay', description: 'Trips, overnight stays, or destination-based plans.' },
+  { id: 'pickup', label: 'Pickup / errand', description: 'Collection tasks, handoffs, or short errands.' },
+];
+const EVENT_HINT_ORIGIN_OPTIONS = [
+  { id: 'home', label: 'Home' },
+  { id: 'custom', label: 'Custom starting point' },
+  { id: 'saved_place', label: 'Saved place' },
+  { id: 'member_work', label: 'Member work place' },
+  { id: 'member_school', label: 'Member school place' },
+];
+const EVENT_HINT_ROUTE_MODE_OPTIONS = [
+  { id: 'car', label: 'Car' },
+  { id: 'bike', label: 'Bike' },
+  { id: 'walk', label: 'Walk' },
+  { id: 'public_transport', label: 'Public transport' },
+];
 
 const MODULE_SIZE_PRESETS = {
   clock: {
@@ -1162,7 +1182,10 @@ function App() {
         refreshCalendarSources();
       }
     } catch (error) {
-      showErrorDialog('Save failed', 'The backend rejected the current configuration or household payload.');
+      showErrorDialog(
+        'Save failed',
+        error.response?.data?.details || error.response?.data?.error || 'The backend rejected the current configuration or household payload.',
+      );
     } finally {
       setSaving(false);
     }
@@ -1443,6 +1466,24 @@ function App() {
     mode: 'car',
   });
 
+  const createEventHintRule = () => ({
+    id: `event_hint_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    enabled: true,
+    label: '',
+    keywords: [],
+    category: 'generic',
+    personLabel: '',
+    locationLabel: '',
+    locationAddress: '',
+    additionalInfo: '',
+    arriveEarlyMinutes: 0,
+    originType: 'home',
+    originReferenceId: '',
+    originLabel: '',
+    originAddress: '',
+    transportMode: 'car',
+  });
+
   const addTravelRouteItem = () => {
     updateTravelTimeConfigState((currentConfig) => ({
       ...currentConfig,
@@ -1464,6 +1505,29 @@ function App() {
       ...currentConfig,
       items: (currentConfig.items || []).filter((item) => item.id !== itemId),
     }));
+  };
+
+  const addEventHintRule = () => {
+    updateConfig((draft) => {
+      draft.services.context.eventHintRules = [...(draft.services.context.eventHintRules || []), createEventHintRule()];
+      return draft;
+    });
+  };
+
+  const updateEventHintRule = (ruleId, changes) => {
+    updateConfig((draft) => {
+      draft.services.context.eventHintRules = (draft.services.context.eventHintRules || []).map((rule) => (
+        rule.id === ruleId ? { ...rule, ...changes } : rule
+      ));
+      return draft;
+    });
+  };
+
+  const removeEventHintRule = (ruleId) => {
+    updateConfig((draft) => {
+      draft.services.context.eventHintRules = (draft.services.context.eventHintRules || []).filter((rule) => rule.id !== ruleId);
+      return draft;
+    });
   };
 
   const resolvePresetSizeForLayout = (gridLayout, preset) => {
@@ -1916,6 +1980,7 @@ function App() {
   const llmConfig = config.services.llm;
   const travelConfig = config.services.travel || {};
   const contextConfig = config.services.context;
+  const eventHintRules = contextConfig.eventHintRules || [];
   const dailyBriefSignals = contextConfig.signals || {};
   const dailyBriefCalendarMode = contextConfig.briefCalendarMode || 'exclude_selected';
   const dailyBriefScopedCalendarIds = dailyBriefCalendarMode === 'include_selected'
@@ -3678,7 +3743,7 @@ function App() {
                         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                           <div>
                             <div className="text-sm font-semibold text-white">Daily Brief Context Engine</div>
-                            <div className="mt-1 text-xs text-slate-500">These settings control what the Daily Brief is allowed to look at and how aggressively it refreshes or reminds.</div>
+                            <div className="mt-1 text-xs text-slate-500">These settings control what the Daily Brief is allowed to look at, how aggressively it refreshes, and how shorthand calendar titles can be expanded into useful household context.</div>
                           </div>
                           <button
                             onClick={forceContextRefresh}
@@ -3691,16 +3756,16 @@ function App() {
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                           <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Context Refresh</label>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Context Refresh (Minutes)</label>
                             <input
                               type="number"
                               min="1"
-                              max="12"
-                              value={contextConfig.refreshHours}
-                              onChange={(event) => updateServiceConfig('context', 'refreshHours', parseInt(event.target.value || '3', 10))}
+                              max="720"
+                              value={contextConfig.refreshMinutes || 180}
+                              onChange={(event) => updateServiceConfig('context', 'refreshMinutes', parseInt(event.target.value || '180', 10))}
                               className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
                             />
-                            <div className="mt-2 text-xs text-slate-500">How often the backend rebuilds the Daily Brief context cache. Lower values feel fresher but can cause more external API and token usage.</div>
+                            <div className="mt-2 text-xs text-slate-500">How often, in minutes, the backend refreshes the Daily Brief context and LLM analysis. Lower values feel fresher but can cause more calendar syncs, API calls, and token usage.</div>
                           </div>
                           <div>
                             <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Trip Lookahead</label>
@@ -3848,6 +3913,280 @@ function App() {
                             Optional. One entry per line. Use this to allow genuinely useful place types or venue names even when calendar items contain street-address style destinations.
                           </div>
                         </div>
+
+                        <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 space-y-4">
+                          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                            <div>
+                              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">Event Hint Rules</div>
+                              <div className="mt-2 text-sm text-slate-400">
+                                Teach Mirrorial what short calendar titles really mean. If somebody only writes keywords like <span className="text-white font-medium">Tysabri</span> or <span className="text-white font-medium">Physio</span>, add the missing context here once and the Daily Brief can reuse it every time that keyword appears.
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={addEventHintRule}
+                              className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-semibold text-white transition-all hover:border-[#ff8bbf] hover:bg-slate-700"
+                            >
+                              Add Event Hint
+                            </button>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 text-sm text-slate-400">
+                            <div className="flex items-start gap-3">
+                              <Info size={16} className="mt-0.5 shrink-0 text-sky-400" />
+                              <div className="space-y-2">
+                                <div>Keyword matching is case-insensitive and checks the event title. A rule with the keyword <span className="text-white font-medium">tysabri</span> will also match <span className="text-white font-medium">Tysabri</span> or <span className="text-white font-medium">TYSABRI Behandlung</span>.</div>
+                                <div>Structured fields work best. If you add a destination address, early-arrival buffer, and route origin, Mirrorial can calculate leave-time advice instead of only paraphrasing your notes.</div>
+                                <div>Public transport leave-time guidance needs Google Routes in the Travel integration. Car, bike, and walk can still work with the normal routing setup.</div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {eventHintRules.length === 0 && (
+                            <div className="rounded-xl border border-dashed border-slate-800 p-6 text-sm text-slate-500">
+                              No event hint rules yet. Add one for shorthand titles like medical treatments, physio, pickups, or vague meeting names that should trigger extra Daily Brief guidance.
+                            </div>
+                          )}
+
+                          <div className="space-y-4">
+                            {eventHintRules.map((rule, index) => (
+                              <div key={rule.id || `event-hint-${index}`} className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 space-y-4">
+                                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                  <div>
+                                    <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Hint Rule {index + 1}</div>
+                                    <div className="mt-1 text-sm font-semibold text-white">{rule.label || (rule.keywords || []).join(', ') || 'Untitled event hint'}</div>
+                                    <div className="mt-1 text-xs text-slate-500">These details are private household knowledge and are only used to enrich Daily Brief output.</div>
+                                  </div>
+                                  <div className="flex items-center gap-4">
+                                    <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                                      <span>Enabled</span>
+                                      <input
+                                        type="checkbox"
+                                        checked={rule.enabled !== false}
+                                        onChange={(event) => updateEventHintRule(rule.id, { enabled: event.target.checked })}
+                                      />
+                                    </label>
+                                    <button type="button" onClick={() => removeEventHintRule(rule.id)} className="text-slate-500 transition-colors hover:text-red-400">
+                                      <Trash2 size={16} />
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Rule Label</label>
+                                    <input
+                                      type="text"
+                                      placeholder="Tysabri infusion"
+                                      value={rule.label || ''}
+                                      onChange={(event) => updateEventHintRule(rule.id, { label: event.target.value })}
+                                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                    />
+                                    <div className="mt-2 text-xs text-slate-500">Optional internal name for this rule. It helps you recognize the rule in the config and debug output.</div>
+                                  </div>
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Keywords</label>
+                                    <input
+                                      type="text"
+                                      placeholder="Tysabri, Physio"
+                                      value={(rule.keywords || []).join(', ')}
+                                      onChange={(event) => updateEventHintRule(rule.id, {
+                                        keywords: event.target.value
+                                          .split(/[\n,]/g)
+                                          .map((entry) => entry.trim())
+                                          .filter(Boolean),
+                                      })}
+                                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                    />
+                                    <div className="mt-2 text-xs text-slate-500">Important field. Add one or more title keywords, separated by commas. Matching ignores upper/lowercase.</div>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Category</label>
+                                    <select
+                                      value={rule.category || 'generic'}
+                                      onChange={(event) => updateEventHintRule(rule.id, { category: event.target.value })}
+                                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                    >
+                                      {EVENT_HINT_CATEGORY_OPTIONS.map((option) => (
+                                        <option key={option.id} value={option.id}>{option.label}</option>
+                                      ))}
+                                    </select>
+                                    <div className="mt-2 text-xs text-slate-500">{(EVENT_HINT_CATEGORY_OPTIONS.find((option) => option.id === (rule.category || 'generic')) || EVENT_HINT_CATEGORY_OPTIONS[0]).description}</div>
+                                  </div>
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Person / Nickname</label>
+                                    <input
+                                      type="text"
+                                      placeholder="Becky"
+                                      value={rule.personLabel || ''}
+                                      onChange={(event) => updateEventHintRule(rule.id, { personLabel: event.target.value })}
+                                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                    />
+                                    <div className="mt-2 text-xs text-slate-500">Optional. Helps the Daily Brief mention who this event normally belongs to.</div>
+                                  </div>
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Arrive Early (Minutes)</label>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max="480"
+                                      value={rule.arriveEarlyMinutes || 0}
+                                      onChange={(event) => updateEventHintRule(rule.id, { arriveEarlyMinutes: parseInt(event.target.value || '0', 10) })}
+                                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                    />
+                                    <div className="mt-2 text-xs text-slate-500">Optional buffer before the event starts. Useful for check-in, paperwork, parking, or preparation time.</div>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Known Destination Label</label>
+                                    <input
+                                      type="text"
+                                      placeholder="Israelitisches Krankenhaus Hamburg"
+                                      value={rule.locationLabel || ''}
+                                      onChange={(event) => updateEventHintRule(rule.id, { locationLabel: event.target.value })}
+                                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                    />
+                                    <div className="mt-2 text-xs text-slate-500">Optional human-friendly place name. This is what the brief can mention instead of the raw event title.</div>
+                                  </div>
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Route Mode</label>
+                                    <select
+                                      value={rule.transportMode || 'car'}
+                                      onChange={(event) => updateEventHintRule(rule.id, { transportMode: event.target.value })}
+                                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                    >
+                                      {EVENT_HINT_ROUTE_MODE_OPTIONS.map((option) => (
+                                        <option key={option.id} value={option.id}>
+                                          {option.id === 'public_transport' && travelConfig.googleRoutesEnabled !== true
+                                            ? `${option.label} (needs Google Routes)`
+                                            : option.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <div className="mt-2 text-xs text-slate-500">Used when Mirrorial tries to calculate a leave time from the route origin to the destination address below.</div>
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Known Destination Address</label>
+                                  <textarea
+                                    rows={3}
+                                    placeholder="Orthopaedische Ambulanz, Example Street 1, Hamburg"
+                                    value={rule.locationAddress || ''}
+                                    onChange={(event) => updateEventHintRule(rule.id, { locationAddress: event.target.value })}
+                                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                  />
+                                  <div className="mt-2 text-xs text-slate-500">Highly recommended for leave-time guidance. If this is filled and the route origin is known, Mirrorial can estimate when to leave.</div>
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Additional Helpful Details</label>
+                                  <textarea
+                                    rows={4}
+                                    placeholder="Wife, regular infusion treatment, needs to bring insurance card, usually checks in at reception."
+                                    value={rule.additionalInfo || ''}
+                                    onChange={(event) => updateEventHintRule(rule.id, { additionalInfo: event.target.value })}
+                                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                  />
+                                  <div className="mt-2 text-xs text-slate-500">Add facts a human in the household already knows. Good examples: purpose, clinic name, building, documents to bring, usual preparation steps, or a more meaningful description of the event.</div>
+                                </div>
+
+                                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 space-y-4">
+                                  <div>
+                                    <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">Route Origin For Leave-Time Advice</div>
+                                    <div className="mt-2 text-sm text-slate-400">Optional. Choose where the journey usually starts. Home is enough for many cases, but you can also use a saved place, a member's school/work place, or a custom start address.</div>
+                                  </div>
+
+                                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                    <div>
+                                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Route Origin</label>
+                                      <select
+                                        value={rule.originType || 'home'}
+                                        onChange={(event) => updateEventHintRule(rule.id, {
+                                          originType: event.target.value,
+                                          originReferenceId: '',
+                                          originLabel: '',
+                                          originAddress: '',
+                                        })}
+                                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                      >
+                                        {EVENT_HINT_ORIGIN_OPTIONS.map((option) => (
+                                          <option key={option.id} value={option.id}>{option.label}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+
+                                    {(rule.originType === 'member_work' || rule.originType === 'member_school') && (
+                                      <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Household Member</label>
+                                        <select
+                                          value={rule.originReferenceId || ''}
+                                          onChange={(event) => updateEventHintRule(rule.id, { originReferenceId: event.target.value })}
+                                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                        >
+                                          <option value="">Select member</option>
+                                          {household.members.map((member) => (
+                                            <option key={member.id} value={member.id}>{member.nickname || member.name || member.id}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    )}
+
+                                    {rule.originType === 'saved_place' && (
+                                      <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Saved Place</label>
+                                        <select
+                                          value={rule.originReferenceId || ''}
+                                          onChange={(event) => updateEventHintRule(rule.id, { originReferenceId: event.target.value })}
+                                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                        >
+                                          <option value="">Select saved place</option>
+                                          {(household.savedPlaces || []).map((place) => (
+                                            <option key={place.id} value={place.id}>{place.name || place.address || place.id}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {rule.originType === 'custom' && (
+                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                      <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Custom Origin Label</label>
+                                        <input
+                                          type="text"
+                                          placeholder="Eppendorfer Marktplatz"
+                                          value={rule.originLabel || ''}
+                                          onChange={(event) => updateEventHintRule(rule.id, { originLabel: event.target.value })}
+                                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Custom Origin Address</label>
+                                        <input
+                                          type="text"
+                                          placeholder="Eppendorfer Marktplatz, Hamburg"
+                                          value={rule.originAddress || ''}
+                                          onChange={(event) => updateEventHintRule(rule.id, { originAddress: event.target.value })}
+                                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  <div className="text-xs text-slate-500">
+                                    Best results: fill <span className="text-white font-medium">Home Base</span> on the Household page, add the destination address above, and choose the usual route origin here.
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       </div>
 
                       <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-800/30 p-3">
@@ -3886,7 +4225,15 @@ function App() {
                       <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Base URL</label>
                         <input
-                          type="text"
+                          type="url"
+                          name="llm-base-url"
+                          autoComplete="section-llm url"
+                          autoCorrect="off"
+                          autoCapitalize="none"
+                          inputMode="url"
+                          spellCheck={false}
+                          data-lpignore="true"
+                          data-1p-ignore="true"
                           placeholder="Optional. Required for custom/local providers."
                           value={llmConfig.baseUrl || ''}
                           onChange={(event) => updateServiceConfig('llm', 'baseUrl', event.target.value)}
@@ -3897,37 +4244,31 @@ function App() {
                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">API Key</label>
                         <input
                           type="password"
+                          name="llm-api-key"
+                          autoComplete="section-llm new-password"
+                          autoCorrect="off"
+                          autoCapitalize="none"
+                          spellCheck={false}
+                          data-lpignore="true"
+                          data-1p-ignore="true"
                           placeholder={llmConfig.apiKeyConfigured ? 'Stored securely. Enter to replace.' : 'Paste API key'}
                           value={llmConfig.apiKey || ''}
                           onChange={(event) => updateServiceConfig('llm', 'apiKey', event.target.value)}
                           className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
                         />
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Refresh Hours</label>
-                          <input
-                            type="number"
-                            min="1"
-                            max="12"
-                            value={llmConfig.refreshHours}
-                            onChange={(event) => updateServiceConfig('llm', 'refreshHours', parseInt(event.target.value || '3', 10))}
-                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Privacy Mode</label>
-                          <select
-                            value={llmConfig.privacyMode}
-                            onChange={(event) => updateServiceConfig('llm', 'privacyMode', event.target.value)}
-                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                          >
-                            <option value="off">Off</option>
-                            <option value="local-only">Local only</option>
-                            <option value="cloud-redacted">Cloud redacted</option>
-                            <option value="full">Full context</option>
-                          </select>
-                        </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Privacy Mode</label>
+                        <select
+                          value={llmConfig.privacyMode}
+                          onChange={(event) => updateServiceConfig('llm', 'privacyMode', event.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                        >
+                          <option value="off">Off</option>
+                          <option value="local-only">Local only</option>
+                          <option value="cloud-redacted">Cloud redacted</option>
+                          <option value="full">Full context</option>
+                        </select>
                       </div>
                     </div>
                   </section>

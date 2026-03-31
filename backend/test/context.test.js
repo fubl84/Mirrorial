@@ -7,16 +7,20 @@ const {
   buildContextCandidates,
   buildDailyBrief,
   buildEnrichedBriefInsights,
+  buildHeuristicLlmSelection,
   estimateRouteFallback,
   filterEventsForDailyBrief,
   filterLlmBriefAgainstInsights,
+  findMatchingEventHintRule,
   findMatchingSavedPlace,
   inferTripAnchorFromEvent,
   buildBriefItemsFromBrief,
   llmBriefHasMeaningfulContent,
   normalizeConfig,
+  resolveContextRefreshMinutes,
   selectActiveTrip,
   selectContextBrief,
+  validateConfigForSave,
   validateLlmSelection,
 } = require('../index.js');
 
@@ -308,6 +312,58 @@ test('normalizeConfig allows travel routing base URL to be cleared without resto
   assert.equal(normalized.services.routing.baseUrl, '');
 });
 
+test('normalizeConfig migrates legacy context refresh hours into shared refresh minutes', () => {
+  const normalized = normalizeConfig({
+    services: {
+      context: {
+        refreshHours: 2,
+      },
+      llm: {
+        refreshHours: 6,
+      },
+    },
+  });
+
+  assert.equal(normalized.services.context.refreshMinutes, 120);
+  assert.equal('refreshHours' in normalized.services.context, false);
+  assert.equal('refreshHours' in normalized.services.llm, false);
+});
+
+test('resolveContextRefreshMinutes prefers explicit minutes and falls back to hours', () => {
+  assert.equal(resolveContextRefreshMinutes({ refreshMinutes: 45, refreshHours: 2 }), 45);
+  assert.equal(resolveContextRefreshMinutes({ refreshHours: 2 }), 120);
+  assert.equal(resolveContextRefreshMinutes({}), 180);
+});
+
+test('validateConfigForSave rejects an invalid LLM base URL', () => {
+  assert.throws(
+    () => validateConfigForSave(normalizeConfig({
+      services: {
+        llm: {
+          baseUrl: 'bernd@test.com',
+        },
+      },
+    })),
+    /LLM Base URL must be a full http:\/\/ or https:\/\/ URL, or empty\./,
+  );
+});
+
+test('validateConfigForSave allows empty and valid service base URLs', () => {
+  const normalized = validateConfigForSave(normalizeConfig({
+    services: {
+      llm: {
+        baseUrl: 'http://127.0.0.1:11434/v1',
+      },
+      travel: {
+        routingBaseUrl: '',
+      },
+    },
+  }));
+
+  assert.equal(normalized.services.llm.baseUrl, 'http://127.0.0.1:11434/v1');
+  assert.equal(normalized.services.travel.routingBaseUrl, '');
+});
+
 test('normalizeConfig migrates legacy google_routes provider into the new travel google flags', () => {
   const normalized = normalizeConfig({
     services: {
@@ -531,6 +587,245 @@ test('buildDailyBrief can surface a travel heads-up before trip enrichment is av
 
   assert.equal(brief.items[0].headline, 'Travel update');
   assert.match(brief.items[0].householdView, /Mucki leaves for Athen|Mucki leaves for/i);
+});
+
+test('buildHeuristicLlmSelection upgrades prep-heavy events with missing details to enrichment candidates', () => {
+  const sourceEvents = [
+    {
+      id: 'alignment',
+      title: 'Weekly Alignment Meeting OL',
+      start: isoFromNow(50),
+      end: isoFromNow(50.5),
+      isAllDay: false,
+      isRecurring: true,
+      calendarId: 'school',
+      calendarSummary: 'Schule',
+      description: '',
+      location: '',
+    },
+    {
+      id: 'kickoff',
+      title: 'Meeting Prep Kick-Off',
+      start: isoFromNow(54),
+      end: isoFromNow(55),
+      isAllDay: false,
+      isRecurring: false,
+      calendarId: 'school',
+      calendarSummary: 'Schule',
+      description: '',
+      location: '',
+    },
+  ];
+
+  const selection = buildHeuristicLlmSelection(sourceEvents);
+  const kickoff = selection.items.find((item) => item.eventId === 'kickoff');
+
+  assert.equal(kickoff?.decision, 'needs_enrichment');
+  assert.equal(kickoff?.enrichmentType, 'household_prep');
+});
+
+test('findMatchingEventHintRule matches event titles case-insensitively', () => {
+  const match = findMatchingEventHintRule({
+    id: 'tysabri_evt',
+    title: 'TYSABRI Behandlung',
+  }, {
+    services: {
+      context: {
+        eventHintRules: [
+          {
+            id: 'tysabri_rule',
+            keywords: ['tysabri'],
+            category: 'medical',
+            personLabel: 'Becky',
+          },
+        ],
+      },
+    },
+  });
+
+  assert.equal(match?.id, 'tysabri_rule');
+  assert.equal(match?.matchedKeyword, 'tysabri');
+  assert.equal(match?.category, 'medical');
+  assert.equal(match?.enrichmentType, 'household_prep');
+});
+
+test('buildHeuristicLlmSelection upgrades matched event hint rules to enrichment candidates', () => {
+  const selection = buildHeuristicLlmSelection([
+    {
+      id: 'tysabri_evt',
+      title: 'Tysabri',
+      start: isoFromNow(4),
+      end: isoFromNow(5),
+      isAllDay: false,
+      isRecurring: false,
+      calendarId: 'family',
+      calendarSummary: 'Family',
+      description: '',
+      location: '',
+    },
+  ], {
+    services: {
+      context: {
+        eventHintRules: [
+          {
+            id: 'tysabri_rule',
+            keywords: ['Tysabri'],
+            category: 'medical',
+            locationLabel: 'Israelitisches Krankenhaus Hamburg',
+          },
+        ],
+      },
+    },
+  });
+
+  assert.equal(selection.items[0]?.decision, 'needs_enrichment');
+  assert.equal(selection.items[0]?.enrichmentType, 'household_prep');
+  assert.match(selection.items[0]?.why || '', /matched_event_hint_rule/i);
+});
+
+test('buildEnrichedBriefInsights derives added facts for prep events with weak calendar metadata', () => {
+  const sourceEvents = [
+    {
+      id: 'alignment',
+      title: 'Weekly Alignment Meeting OL',
+      start: '2026-04-02T10:30:00+02:00',
+      end: '2026-04-02T11:00:00+02:00',
+      isAllDay: false,
+      isRecurring: true,
+      calendarId: 'school',
+      calendarSummary: 'Schule',
+      description: '',
+      location: '',
+    },
+    {
+      id: 'onboarding',
+      title: 'Tatjana Onboarding OL',
+      start: '2026-04-02T11:15:00+02:00',
+      end: '2026-04-02T12:00:00+02:00',
+      isAllDay: false,
+      isRecurring: false,
+      calendarId: 'school',
+      calendarSummary: 'Schule',
+      description: '',
+      location: '',
+    },
+    {
+      id: 'kickoff',
+      title: 'Meeting Prep Kick-Off',
+      start: '2026-04-02T15:00:00+02:00',
+      end: '2026-04-02T16:00:00+02:00',
+      isAllDay: false,
+      isRecurring: false,
+      calendarId: 'school',
+      calendarSummary: 'Schule',
+      description: '',
+      location: '',
+    },
+  ];
+
+  const { insights } = buildEnrichedBriefInsights({
+    selections: {
+      items: [
+        {
+          eventId: 'kickoff',
+          decision: 'needs_enrichment',
+          enrichmentType: 'household_prep',
+          why: 'prep_risk',
+        },
+      ],
+    },
+    sourceEvents,
+    activeTrip: null,
+    recentTrip: null,
+    commuteContext: null,
+    householdEventContext: null,
+  });
+
+  assert.equal(insights.length, 1);
+  assert.ok(insights[0].addedFacts.some((fact) => /no location, notes, or link/i.test(fact)));
+  assert.ok(insights[0].addedFacts.some((fact) => /3 calendar items on that day/i.test(fact)));
+});
+
+test('buildEnrichedBriefInsights includes user-provided event hint facts for sparse events', () => {
+  const sourceEvents = [
+    {
+      id: 'tysabri_evt',
+      title: 'Tysabri',
+      start: '2026-03-31T15:00:00+02:00',
+      end: '2026-03-31T16:00:00+02:00',
+      isAllDay: false,
+      isRecurring: false,
+      calendarId: 'family',
+      calendarSummary: 'Family',
+      description: '',
+      location: '',
+    },
+  ];
+
+  const { insights } = buildEnrichedBriefInsights({
+    selections: {
+      items: [
+        {
+          eventId: 'tysabri_evt',
+          decision: 'needs_enrichment',
+          enrichmentType: 'household_prep',
+          why: 'matched_event_hint_rule:tysabri',
+        },
+      ],
+    },
+    sourceEvents,
+    activeTrip: null,
+    recentTrip: null,
+    commuteContext: null,
+    householdEventContext: null,
+    config: {
+      services: {
+        context: {
+          eventHintRules: [
+            {
+              id: 'tysabri_rule',
+              keywords: ['Tysabri'],
+              category: 'medical',
+              personLabel: 'Becky',
+              locationLabel: 'Israelitisches Krankenhaus Hamburg',
+              locationAddress: 'Example Street 1, Hamburg',
+              arriveEarlyMinutes: 15,
+              additionalInfo: 'Regular infusion treatment.',
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  assert.equal(insights.length, 1);
+  assert.ok(insights[0].addedFacts.some((fact) => /Becky is the main person/i.test(fact)));
+  assert.ok(insights[0].addedFacts.some((fact) => /Known destination: Israelitisches Krankenhaus Hamburg/i.test(fact)));
+  assert.ok(insights[0].addedFacts.some((fact) => /arrive about 15 min early/i.test(fact)));
+  assert.ok(insights[0].addedFacts.some((fact) => /Regular infusion treatment/i.test(fact)));
+});
+
+test('buildDailyBrief does not fall back to a plain prep-event reminder without added context', () => {
+  const events = [
+    {
+      id: 'kickoff',
+      title: 'Meeting Prep Kick-Off',
+      start: isoFromNow(54),
+      end: isoFromNow(55),
+      isAllDay: false,
+      isRecurring: false,
+      calendarId: 'school',
+      calendarSummary: 'Schule',
+      description: '',
+      location: '',
+    },
+  ];
+
+  const brief = buildDailyBrief(events, null, events[0], null, null, null, null, null, null, {});
+
+  assert.equal(brief.items.length, 0);
+  assert.deepEqual(brief.bullets, []);
+  assert.equal(brief.householdView, '');
 });
 
 test('llmBriefHasMeaningfulContent rejects empty LLM briefs', () => {
