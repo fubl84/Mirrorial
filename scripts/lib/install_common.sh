@@ -14,6 +14,12 @@ resolve_user_home() {
   echo "$resolved"
 }
 
+run_repo_script() {
+  local script_path="$1"
+  shift || true
+  run_cmd bash "$script_path" "$@"
+}
+
 run_cmd() {
   echo "+ $*"
   if [[ "$DRY_RUN" == "false" ]]; then
@@ -56,7 +62,7 @@ ensure_swap_if_needed() {
 
   if (( mem_total_kb < 900000 )); then
     echo "ℹ️ Low-memory device detected. Enabling temporary swap for the build."
-    run_cmd "$PROJECT_ROOT/scripts/setup_swap.sh"
+    run_repo_script "$PROJECT_ROOT/scripts/setup_swap.sh"
   fi
 }
 
@@ -115,16 +121,16 @@ install_engine_and_bundle() {
     echo "ℹ️ Skipping flutter-pi installation by request."
   else
     echo "🎨 Installing flutter-pi..."
-    run_cmd "$PROJECT_ROOT/scripts/install_engine.sh"
+    run_repo_script "$PROJECT_ROOT/scripts/install_engine.sh"
   fi
 
   echo "🏗️ Building display bundle..."
-  run_user_shell "cd \"$PROJECT_ROOT\" && MIRRORIAL_SKIP_RESTART=1 \"$PROJECT_ROOT/scripts/build_display.sh\""
+  run_user_shell "cd \"$PROJECT_ROOT\" && MIRRORIAL_SKIP_RESTART=1 bash \"$PROJECT_ROOT/scripts/build_display.sh\""
 }
 
 register_services() {
   echo "🔧 Registering Mirrorial services..."
-  run_cmd env SERVICE_USER="$ACTUAL_USER" PROJECT_ROOT_OVERRIDE="$PROJECT_ROOT" "$PROJECT_ROOT/scripts/register_services.sh"
+  run_cmd env SERVICE_USER="$ACTUAL_USER" PROJECT_ROOT_OVERRIDE="$PROJECT_ROOT" bash "$PROJECT_ROOT/scripts/register_services.sh"
 }
 
 run_health_check() {
@@ -134,7 +140,7 @@ run_health_check() {
   fi
 
   echo "🩺 Running service health check..."
-  run_cmd "$PROJECT_ROOT/scripts/check_health.sh"
+  run_repo_script "$PROJECT_ROOT/scripts/check_health.sh"
 }
 
 maybe_reboot() {
