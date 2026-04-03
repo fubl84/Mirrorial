@@ -139,6 +139,7 @@ Runtime data is stored outside the repository, primarily in:
 
 The repository includes Linux-oriented setup and maintenance scripts in `scripts/`, including:
 
+- `scripts/install_linux.sh`
 - `scripts/install_pi.sh`
 - `scripts/setup.sh`
 - `scripts/install_deps.sh`
@@ -146,19 +147,28 @@ The repository includes Linux-oriented setup and maintenance scripts in `scripts
 - `scripts/register_services.sh`
 - `scripts/check_health.sh`
 
-Supported `v1.0` deployment target:
+Installer profile selection is automatic. The entrypoint detects the host and chooses the best matching install profile.
 
-- Raspberry Pi Zero 2 W or newer
-- Raspberry Pi OS Bookworm 64-bit
-- Linux with systemd
+Support tiers:
+
+- Supported: Raspberry Pi Zero 2 W or newer on Raspberry Pi OS Bookworm 64-bit
+- Experimental: Raspberry Pi Zero 2 W or newer on Raspberry Pi OS Trixie 64-bit
+- Experimental: other Debian-family Linux boards with `apt`, `systemd`, DRM/KMS, and `arm64` or `amd64`
 
 Recommended installer command from a freshly cloned repo:
 
 ```bash
-./scripts/install_pi.sh --no-reboot
+./scripts/install_linux.sh --no-reboot
 ```
 
-Use `--dry-run` to inspect the steps first. The installer is designed to run unattended, install dependencies, build the remote UI and display bundle, register services, and run a health check.
+Compatibility wrappers remain available:
+
+```bash
+./scripts/install_pi.sh --no-reboot
+./scripts/setup.sh --no-reboot
+```
+
+Use `--dry-run` to inspect the steps first. Use `--profile` to force a detected profile when needed. The installer is designed to run unattended, install dependencies, build the remote UI and display bundle, register services, and run a health check.
 
 ## Testing and verification
 

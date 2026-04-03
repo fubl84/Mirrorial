@@ -6,6 +6,7 @@ config.json
 tokens.json
 adjustments.md
 adjustments/
+custom_scripts/
 
 # Node.js / React
 node_modules/
