@@ -8,15 +8,15 @@ void main() {
   });
 
   test('address-like locations are only allowed for useful destinations', () {
-    expect(shouldAllowAddressLikeLocation('Schottmüllerstr. 15, Hamburg', null), false);
-    expect(shouldAllowAddressLikeLocation('UKE hospital, Martinistrasse 52, Hamburg', null), true);
+    expect(shouldAllowAddressLikeLocation('Beispielstr. 15, Musterstadt', null), false);
+    expect(shouldAllowAddressLikeLocation('City Hospital, Klinikstrasse 52, Musterstadt', null), true);
     expect(
       shouldAllowAddressLikeLocation(
-        'Karolinenstrasse 8, Hamburg',
+        'Beispielallee 8, Musterstadt',
         {
           'services': {
             'context': {
-              'usefulLocationWhitelist': ['karolinenstrasse'],
+              'usefulLocationWhitelist': ['beispielallee'],
             },
           },
         },

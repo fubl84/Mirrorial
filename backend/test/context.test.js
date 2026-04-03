@@ -385,7 +385,7 @@ test('inferTripAnchorFromEvent suppresses home-address-like destinations unless 
     id: 'evt_plain_address',
     title: 'Privat',
     description: '',
-    location: 'Schottmüllerstr. 15, 20251 Hamburg',
+    location: 'Beispielstr. 15, 12345 Musterstadt',
     start: isoFromNow(24),
     end: isoFromNow(26),
     isAllDay: false,
@@ -395,14 +395,14 @@ test('inferTripAnchorFromEvent suppresses home-address-like destinations unless 
     ...plainAddressEvent,
     id: 'evt_useful_address',
     title: 'Hospital appointment',
-    location: 'UKE, Martinistrasse 52, Hamburg',
+    location: 'City Hospital, Klinikstrasse 52, Musterstadt',
   };
 
   assert.equal(inferTripAnchorFromEvent(plainAddressEvent, { services: { context: { usefulLocationWhitelist: [] } } }, null), null);
 
   const usefulAnchor = inferTripAnchorFromEvent(usefulAddressEvent, { services: { context: { usefulLocationWhitelist: [] } } }, null);
   assert.ok(usefulAnchor);
-  assert.match(usefulAnchor.destination, /Martinistrasse|UKE/i);
+  assert.match(usefulAnchor.destination, /Klinikstrasse|City Hospital/i);
 });
 
 test('inferTripAnchorFromEvent allows address-like destinations when they match the configured whitelist', () => {
@@ -410,7 +410,7 @@ test('inferTripAnchorFromEvent allows address-like destinations when they match 
     id: 'evt_whitelist',
     title: 'Messehallen setup',
     description: 'Annual hall access',
-    location: 'Karolinenstrasse 8, Hamburg',
+    location: 'Beispielallee 8, Musterstadt',
     start: isoFromNow(24),
     end: isoFromNow(26),
     isAllDay: false,
@@ -429,7 +429,7 @@ test('inferTripAnchorFromEvent allows address-like destinations when they match 
 test('inferTripAnchorFromEvent extracts German travel destinations from event titles', () => {
   const event = {
     id: 'evt_trip_title',
-    title: 'Mucki Dienstreise Athen',
+    title: 'Alex Dienstreise Athen',
     description: '',
     location: '',
     start: isoDateOffset(2),
@@ -566,7 +566,7 @@ test('buildDailyBrief can surface a travel heads-up before trip enrichment is av
   const events = [
     {
       id: 'trip_evt',
-      title: 'Mucki Dienstreise Athen',
+      title: 'Alex Dienstreise Athen',
       start: isoDateOffset(2),
       end: isoDateOffset(5),
       isAllDay: true,
@@ -574,19 +574,19 @@ test('buildDailyBrief can surface a travel heads-up before trip enrichment is av
   ];
 
   const travelHeadsUpContext = {
-    title: 'Mucki Dienstreise Athen',
+    title: 'Alex Dienstreise Athen',
     destination: 'Athen',
     start: isoDateOffset(2),
     end: isoDateOffset(5),
     isAllDay: true,
     sourceEventId: 'trip_evt',
-    travelerLabel: 'Mucki',
+    travelerLabel: 'Alex',
   };
 
   const brief = buildDailyBrief(events, null, null, null, travelHeadsUpContext, null, null, null, null, {});
 
   assert.equal(brief.items[0].headline, 'Travel update');
-  assert.match(brief.items[0].householdView, /Mucki leaves for Athen|Mucki leaves for/i);
+  assert.match(brief.items[0].householdView, /Alex leaves for Athen|Alex leaves for/i);
 });
 
 test('buildHeuristicLlmSelection upgrades prep-heavy events with missing details to enrichment candidates', () => {
@@ -626,25 +626,25 @@ test('buildHeuristicLlmSelection upgrades prep-heavy events with missing details
 
 test('findMatchingEventHintRule matches event titles case-insensitively', () => {
   const match = findMatchingEventHintRule({
-    id: 'tysabri_evt',
-    title: 'TYSABRI Behandlung',
+    id: 'infusion_evt',
+    title: 'INFUSION treatment',
   }, {
     services: {
       context: {
         eventHintRules: [
           {
-            id: 'tysabri_rule',
-            keywords: ['tysabri'],
+            id: 'infusion_rule',
+            keywords: ['infusion'],
             category: 'medical',
-            personLabel: 'Becky',
+            personLabel: 'Alex',
           },
         ],
       },
     },
   });
 
-  assert.equal(match?.id, 'tysabri_rule');
-  assert.equal(match?.matchedKeyword, 'tysabri');
+  assert.equal(match?.id, 'infusion_rule');
+  assert.equal(match?.matchedKeyword, 'infusion');
   assert.equal(match?.category, 'medical');
   assert.equal(match?.enrichmentType, 'household_prep');
 });
@@ -652,8 +652,8 @@ test('findMatchingEventHintRule matches event titles case-insensitively', () => 
 test('buildHeuristicLlmSelection upgrades matched event hint rules to enrichment candidates', () => {
   const selection = buildHeuristicLlmSelection([
     {
-      id: 'tysabri_evt',
-      title: 'Tysabri',
+      id: 'infusion_evt',
+      title: 'Infusion',
       start: isoFromNow(4),
       end: isoFromNow(5),
       isAllDay: false,
@@ -668,10 +668,10 @@ test('buildHeuristicLlmSelection upgrades matched event hint rules to enrichment
       context: {
         eventHintRules: [
           {
-            id: 'tysabri_rule',
-            keywords: ['Tysabri'],
+            id: 'infusion_rule',
+            keywords: ['Infusion'],
             category: 'medical',
-            locationLabel: 'Israelitisches Krankenhaus Hamburg',
+            locationLabel: 'City Medical Center',
           },
         ],
       },
@@ -699,7 +699,7 @@ test('buildEnrichedBriefInsights derives added facts for prep events with weak c
     },
     {
       id: 'onboarding',
-      title: 'Tatjana Onboarding OL',
+      title: 'Vendor Onboarding OL',
       start: '2026-04-02T11:15:00+02:00',
       end: '2026-04-02T12:00:00+02:00',
       isAllDay: false,
@@ -749,8 +749,8 @@ test('buildEnrichedBriefInsights derives added facts for prep events with weak c
 test('buildEnrichedBriefInsights includes user-provided event hint facts for sparse events', () => {
   const sourceEvents = [
     {
-      id: 'tysabri_evt',
-      title: 'Tysabri',
+      id: 'infusion_evt',
+      title: 'Infusion',
       start: '2026-03-31T15:00:00+02:00',
       end: '2026-03-31T16:00:00+02:00',
       isAllDay: false,
@@ -766,10 +766,10 @@ test('buildEnrichedBriefInsights includes user-provided event hint facts for spa
     selections: {
       items: [
         {
-          eventId: 'tysabri_evt',
+          eventId: 'infusion_evt',
           decision: 'needs_enrichment',
           enrichmentType: 'household_prep',
-          why: 'matched_event_hint_rule:tysabri',
+          why: 'matched_event_hint_rule:infusion',
         },
       ],
     },
@@ -783,12 +783,12 @@ test('buildEnrichedBriefInsights includes user-provided event hint facts for spa
         context: {
           eventHintRules: [
             {
-              id: 'tysabri_rule',
-              keywords: ['Tysabri'],
+              id: 'infusion_rule',
+              keywords: ['Infusion'],
               category: 'medical',
-              personLabel: 'Becky',
-              locationLabel: 'Israelitisches Krankenhaus Hamburg',
-              locationAddress: 'Example Street 1, Hamburg',
+              personLabel: 'Alex',
+              locationLabel: 'City Medical Center',
+              locationAddress: 'Example Street 1, Sampletown',
               arriveEarlyMinutes: 15,
               additionalInfo: 'Regular infusion treatment.',
             },
@@ -799,8 +799,8 @@ test('buildEnrichedBriefInsights includes user-provided event hint facts for spa
   });
 
   assert.equal(insights.length, 1);
-  assert.ok(insights[0].addedFacts.some((fact) => /Becky is the main person/i.test(fact)));
-  assert.ok(insights[0].addedFacts.some((fact) => /Known destination: Israelitisches Krankenhaus Hamburg/i.test(fact)));
+  assert.ok(insights[0].addedFacts.some((fact) => /Alex is the main person/i.test(fact)));
+  assert.ok(insights[0].addedFacts.some((fact) => /Known destination: City Medical Center/i.test(fact)));
   assert.ok(insights[0].addedFacts.some((fact) => /arrive about 15 min early/i.test(fact)));
   assert.ok(insights[0].addedFacts.some((fact) => /Regular infusion treatment/i.test(fact)));
 });
@@ -845,14 +845,14 @@ test('llmBriefHasMeaningfulContent rejects empty LLM briefs', () => {
 test('selectContextBrief falls back to deterministic content when LLM brief is empty', () => {
   const deterministicBrief = {
     headline: 'Travel update',
-    bullets: ['Mucki leaves for Athens soon.'],
-    householdView: 'Mucki leaves for Athens on Tue.',
+    bullets: ['Alex leaves for Athens soon.'],
+    householdView: 'Alex leaves for Athens on Tue.',
     items: [
       {
         id: 'active_trip',
         headline: 'Travel update',
-        householdView: 'Mucki leaves for Athens on Tue.',
-        bullets: ['Mucki leaves for Athens soon.'],
+        householdView: 'Alex leaves for Athens on Tue.',
+        bullets: ['Alex leaves for Athens soon.'],
       },
     ],
   };
@@ -875,14 +875,14 @@ test('selectContextBrief falls back to deterministic content when LLM brief is e
 test('selectContextBrief uses LLM-backed items when the LLM brief is meaningful', () => {
   const deterministicBrief = {
     headline: 'Travel update',
-    bullets: ['Christoph leaves for Athens soon.'],
-    householdView: 'Christoph leaves for Athens on Tue.',
+    bullets: ['Alex leaves for Athens soon.'],
+    householdView: 'Alex leaves for Athens on Tue.',
     items: [
       {
         id: 'active_trip',
         headline: 'Travel update',
-        householdView: 'Christoph leaves for Athens on Tue.',
-        bullets: ['Christoph leaves for Athens soon.'],
+        householdView: 'Alex leaves for Athens on Tue.',
+        bullets: ['Alex leaves for Athens soon.'],
       },
     ],
   };
@@ -920,7 +920,7 @@ test('buildBriefItemsFromBrief creates a single card from the top-level brief', 
 test('buildContextCandidates highlights an upcoming return leg during an active trip', () => {
   const activeTrip = {
     destination: 'Athens',
-    travelerLabel: 'Mucki',
+    travelerLabel: 'Alex',
     enrichment: {
       destination: 'Athens, Greece',
       forecast: { label: '18-24C, clear', narrative: 'Looks consistent through the trip: around 22C and mostly clear.' },
@@ -966,7 +966,7 @@ test('selectActiveTrip surfaces an upcoming trip within three days', () => {
 test('buildContextCandidates does not show destination live conditions before departure', () => {
   const activeTrip = {
     destination: 'Athens',
-    travelerLabel: 'Christoph',
+    travelerLabel: 'Alex',
     enrichment: {
       destination: 'Athens, Greece',
       forecast: { label: '7-18C, partly cloudy', narrative: 'Mixed weather through the trip, around 13C with rain likely on multiple days.' },
@@ -1046,7 +1046,7 @@ test('buildEnrichedBriefInsights prefers non-calendar route and ticket facts', (
 test('buildEnrichedBriefInsights omits frozen local time from travel facts', () => {
   const event = {
     id: 'evt_trip',
-    title: 'Mucki Dienstreise Athen',
+    title: 'Alex Dienstreise Athen',
     description: '',
     location: '',
     start: isoDateOffset(2),

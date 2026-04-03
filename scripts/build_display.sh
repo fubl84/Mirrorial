@@ -6,7 +6,26 @@ set -euo pipefail
 PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 FLUTTER_SDK_DIR="$HOME/flutter"
 FLUTTER_BIN="$FLUTTER_SDK_DIR/bin/flutter"
+FLUTTER_DART_BIN="$FLUTTER_SDK_DIR/bin/dart"
 RESTART_DISPLAY=${MIRRORIAL_SKIP_RESTART:-0}
+HOST_ARCH=$(uname -m)
+FLUTTERPI_TOOL_VERSION="${MIRRORIAL_FLUTTERPI_TOOL_VERSION:-0.10.1}"
+
+case "$HOST_ARCH" in
+    aarch64|arm64)
+        FLUTTERPI_ARCH="arm64"
+        ;;
+    x86_64|amd64)
+        FLUTTERPI_ARCH="x64"
+        ;;
+    armv7l|armv6l)
+        FLUTTERPI_ARCH="arm"
+        ;;
+    *)
+        echo "❌ Unsupported host architecture for flutter bundle build: $HOST_ARCH" >&2
+        exit 1
+        ;;
+esac
 
 # CRITICAL: Redirect temp folders away from RAM-disk (/tmp) to the SD card
 export TMPDIR="$HOME/.mirrorial_tmp"
@@ -40,9 +59,24 @@ fi
 echo "🛠️ Building Flutter bundle..."
 cd "$PROJECT_ROOT/display_app"
 
+# The mirror build only targets Linux/flutter-pi. Disabling unrelated platforms
+# avoids unnecessary SDK/toolchain lookups on low-memory deployment hosts.
+"$FLUTTER_BIN" config \
+    --enable-linux-desktop \
+    --no-enable-android \
+    --no-enable-ios \
+    --no-enable-web \
+    --no-enable-macos-desktop \
+    --no-enable-windows-desktop
+
 # Ensure we use our SD-card cache for pub
 "$FLUTTER_BIN" pub get
-"$FLUTTER_BIN" build bundle
+
+echo "🧰 Installing flutterpi_tool ${FLUTTERPI_TOOL_VERSION}..."
+"$FLUTTER_DART_BIN" pub global activate flutterpi_tool "$FLUTTERPI_TOOL_VERSION"
+
+echo "📦 Building flutter-pi release bundle..."
+"$FLUTTER_DART_BIN" pub global run flutterpi_tool build --arch="$FLUTTERPI_ARCH" --release
 
 # 3. Organize bundle
 echo "📁 Organizing bundle..."

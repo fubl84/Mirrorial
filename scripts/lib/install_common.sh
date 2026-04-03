@@ -73,9 +73,11 @@ install_system_packages() {
     avahi-daemon \
     build-essential \
     ca-certificates \
+    clang \
     cmake \
     curl \
     git \
+    lld \
     libasound2-dev \
     libdrm-dev \
     libegl1-mesa-dev \

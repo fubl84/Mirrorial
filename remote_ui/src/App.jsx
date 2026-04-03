@@ -3919,7 +3919,7 @@ function App() {
                             <div>
                               <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">Event Hint Rules</div>
                               <div className="mt-2 text-sm text-slate-400">
-                                Teach Mirrorial what short calendar titles really mean. If somebody only writes keywords like <span className="text-white font-medium">Tysabri</span> or <span className="text-white font-medium">Physio</span>, add the missing context here once and the Daily Brief can reuse it every time that keyword appears.
+                                Teach Mirrorial what short calendar titles really mean. If somebody only writes keywords like <span className="text-white font-medium">Infusion</span> or <span className="text-white font-medium">Physio</span>, add the missing context here once and the Daily Brief can reuse it every time that keyword appears.
                               </div>
                             </div>
                             <button
@@ -3935,7 +3935,7 @@ function App() {
                             <div className="flex items-start gap-3">
                               <Info size={16} className="mt-0.5 shrink-0 text-sky-400" />
                               <div className="space-y-2">
-                                <div>Keyword matching is case-insensitive and checks the event title. A rule with the keyword <span className="text-white font-medium">tysabri</span> will also match <span className="text-white font-medium">Tysabri</span> or <span className="text-white font-medium">TYSABRI Behandlung</span>.</div>
+                                <div>Keyword matching is case-insensitive and checks the event title. A rule with the keyword <span className="text-white font-medium">infusion</span> will also match <span className="text-white font-medium">Infusion</span> or <span className="text-white font-medium">INFUSION treatment</span>.</div>
                                 <div>Structured fields work best. If you add a destination address, early-arrival buffer, and route origin, Mirrorial can calculate leave-time advice instead of only paraphrasing your notes.</div>
                                 <div>Public transport leave-time guidance needs Google Routes in the Travel integration. Car, bike, and walk can still work with the normal routing setup.</div>
                               </div>
@@ -3977,7 +3977,7 @@ function App() {
                                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Rule Label</label>
                                     <input
                                       type="text"
-                                      placeholder="Tysabri infusion"
+                                      placeholder="Infusion appointment"
                                       value={rule.label || ''}
                                       onChange={(event) => updateEventHintRule(rule.id, { label: event.target.value })}
                                       className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
@@ -3988,7 +3988,7 @@ function App() {
                                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Keywords</label>
                                     <input
                                       type="text"
-                                      placeholder="Tysabri, Physio"
+                                      placeholder="Infusion, Physio"
                                       value={(rule.keywords || []).join(', ')}
                                       onChange={(event) => updateEventHintRule(rule.id, {
                                         keywords: event.target.value
@@ -4020,7 +4020,7 @@ function App() {
                                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Person / Nickname</label>
                                     <input
                                       type="text"
-                                      placeholder="Becky"
+                                      placeholder="Alex"
                                       value={rule.personLabel || ''}
                                       onChange={(event) => updateEventHintRule(rule.id, { personLabel: event.target.value })}
                                       className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
@@ -4046,7 +4046,7 @@ function App() {
                                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Known Destination Label</label>
                                     <input
                                       type="text"
-                                      placeholder="Israelitisches Krankenhaus Hamburg"
+                                      placeholder="City Medical Center"
                                       value={rule.locationLabel || ''}
                                       onChange={(event) => updateEventHintRule(rule.id, { locationLabel: event.target.value })}
                                       className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
