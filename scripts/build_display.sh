@@ -76,12 +76,16 @@ echo "🧰 Installing flutterpi_tool ${FLUTTERPI_TOOL_VERSION}..."
 "$FLUTTER_DART_BIN" pub global activate flutterpi_tool "$FLUTTERPI_TOOL_VERSION"
 
 echo "📦 Building flutter-pi release bundle..."
+rm -rf "$PROJECT_ROOT/display_app/bundle"
 "$FLUTTER_DART_BIN" pub global run flutterpi_tool build --arch="$FLUTTERPI_ARCH" --release
 
-# 3. Organize bundle
-echo "📁 Organizing bundle..."
-rm -rf "$PROJECT_ROOT/display_app/bundle"
-cp -r "$PROJECT_ROOT/display_app/build/flutter_assets" "$PROJECT_ROOT/display_app/bundle"
+# 3. Validate bundle output
+echo "📁 Validating flutter-pi bundle..."
+if [[ ! -f "$PROJECT_ROOT/display_app/bundle/app.so" ]]; then
+    echo "❌ flutterpi_tool did not produce bundle/app.so." >&2
+    echo "   Expected release bundle at: $PROJECT_ROOT/display_app/bundle" >&2
+    exit 1
+fi
 
 # 4. Cleanup
 rm -rf "$TMPDIR"/*
