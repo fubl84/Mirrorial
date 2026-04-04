@@ -86,17 +86,22 @@ echo "📁 Organizing flutter-pi bundle..."
 BUNDLE_DIR="$PROJECT_ROOT/display_app/bundle"
 STAGED_ASSETS_DIR="$PROJECT_ROOT/display_app/build/flutter_assets"
 
+mkdir -p "$BUNDLE_DIR"
+
+if [[ -d "$STAGED_ASSETS_DIR" ]]; then
+    echo "ℹ️ Copying staged flutter assets into bundle/."
+    cp -R "$STAGED_ASSETS_DIR"/. "$BUNDLE_DIR"/
+fi
+
 if [[ ! -f "$BUNDLE_DIR/app.so" ]]; then
     if [[ -f "$STAGED_ASSETS_DIR/app.so" ]]; then
         echo "ℹ️ flutterpi_tool staged app.so in build/flutter_assets. Copying it into bundle/."
-        mkdir -p "$BUNDLE_DIR"
         cp "$STAGED_ASSETS_DIR/app.so" "$BUNDLE_DIR/app.so"
     else
         FALLBACK_APP_SO=$(find "$PROJECT_ROOT/display_app/.dart_tool/flutter_build" -type f -name app.so -print -quit 2>/dev/null || true)
         if [[ -n "${FALLBACK_APP_SO:-}" ]]; then
             echo "ℹ️ flutterpi_tool did not stage app.so directly. Recovering it from Flutter build intermediates:"
             echo "   $FALLBACK_APP_SO"
-            mkdir -p "$BUNDLE_DIR"
             cp "$FALLBACK_APP_SO" "$BUNDLE_DIR/app.so"
         fi
     fi
@@ -118,6 +123,8 @@ if [[ ! -f "$BUNDLE_DIR/FontManifest.json" ]]; then
     echo "❌ flutterpi_tool bundle is missing FontManifest.json." >&2
     echo "   Files currently present under bundle/:" >&2
     find "$BUNDLE_DIR" -maxdepth 3 -type f | sort >&2 || true
+    echo "   Files currently present under build/flutter_assets/:" >&2
+    find "$STAGED_ASSETS_DIR" -maxdepth 3 -type f | sort >&2 || true
     exit 1
 fi
 
