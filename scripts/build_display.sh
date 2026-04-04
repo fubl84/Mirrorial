@@ -78,16 +78,18 @@ cd "$PROJECT_ROOT/display_app"
 "$FLUTTER_BIN" pub get
 
 echo "📦 Building flutter-pi release bundle..."
-rm -rf "$PROJECT_ROOT/display_app/bundle"
+rm -rf "$PROJECT_ROOT/display_app/bundle" "$PROJECT_ROOT/display_app/build/flutter_assets"
 "$FLUTTER_DART_BIN" run flutterpi_tool build --arch="$FLUTTERPI_ARCH" --release
 
-# 3. Validate bundle output
-echo "📁 Validating flutter-pi bundle..."
-if [[ ! -f "$PROJECT_ROOT/display_app/bundle/app.so" ]]; then
-    echo "❌ flutterpi_tool did not produce bundle/app.so." >&2
-    echo "   Expected release bundle at: $PROJECT_ROOT/display_app/bundle" >&2
+# 3. Organize bundle
+echo "📁 Organizing flutter-pi bundle..."
+if [[ ! -f "$PROJECT_ROOT/display_app/build/flutter_assets/app.so" ]]; then
+    echo "❌ flutterpi_tool did not produce build/flutter_assets/app.so." >&2
+    echo "   Expected release bundle staging dir at: $PROJECT_ROOT/display_app/build/flutter_assets" >&2
     exit 1
 fi
+
+cp -r "$PROJECT_ROOT/display_app/build/flutter_assets" "$PROJECT_ROOT/display_app/bundle"
 
 # 4. Cleanup
 rm -rf "$TMPDIR"/*
