@@ -9,6 +9,7 @@ FLUTTER_BIN="$FLUTTER_SDK_DIR/bin/flutter"
 FLUTTER_DART_BIN="$FLUTTER_SDK_DIR/bin/dart"
 RESTART_DISPLAY=${MIRRORIAL_SKIP_RESTART:-0}
 HOST_ARCH=$(uname -m)
+FLUTTER_VERSION="${MIRRORIAL_FLUTTER_VERSION:-3.38.4}"
 
 case "$HOST_ARCH" in
     aarch64|arm64)
@@ -36,23 +37,28 @@ echo "🏗️ Preparing to build Mirrorial Display..."
 
 # 1. Install or Update Flutter SDK
 if [ ! -d "$FLUTTER_SDK_DIR/.git" ]; then
-    echo "📥 Installing Flutter SDK (One-time setup)..."
+    echo "📥 Installing Flutter SDK ${FLUTTER_VERSION} (One-time setup)..."
     rm -rf "$FLUTTER_SDK_DIR" # Clear any broken non-git folders
-    git clone https://github.com/flutter/flutter.git -b stable "$FLUTTER_SDK_DIR"
+    git clone https://github.com/flutter/flutter.git "$FLUTTER_SDK_DIR"
+    cd "$FLUTTER_SDK_DIR"
+    git checkout "$FLUTTER_VERSION"
 else
-    echo "🔄 Flutter SDK exists. Checking for updates..."
+    echo "🔄 Flutter SDK exists. Ensuring version ${FLUTTER_VERSION}..."
     cd "$FLUTTER_SDK_DIR"
     # Detect architecture/corruption. If broken, reset.
     if ! bin/flutter --version > /dev/null 2>&1; then
         echo "⚠️ SDK corrupted or wrong architecture. Performing hard reset..."
         git clean -xfd
-        git checkout .
+        git reset --hard
     else
-        # Just a quick pull to keep it current
-        git pull origin stable
+        git fetch --tags origin
     fi
+    git checkout "$FLUTTER_VERSION"
     cd "$PROJECT_ROOT"
 fi
+
+echo "🧭 Using Flutter SDK version:"
+"$FLUTTER_BIN" --version
 
 # 2. Build the Flutter Bundle
 echo "🛠️ Building Flutter bundle..."

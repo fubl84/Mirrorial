@@ -170,7 +170,7 @@ Compatibility wrappers remain available:
 
 Use `--dry-run` to inspect the steps first. Use `--profile` to force a detected profile when needed. The installer is designed to run unattended, install dependencies, build the remote UI and display bundle, register services, and run a health check.
 
-For the display pipeline, Mirrorial uses `flutter-pi` plus the project-local `flutterpi_tool build` workflow to produce the deployable bundle. This avoids mixing a plain `flutter build bundle` output with a separately managed runtime engine.
+For the display pipeline, Mirrorial uses `flutter-pi` plus the project-local `flutterpi_tool build` workflow to produce the deployable bundle. The Linux installer pins the Flutter SDK used for that build to a known-compatible version instead of following the latest Flutter stable release.
 
 ## Testing and verification
 
