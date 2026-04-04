@@ -9,7 +9,6 @@ FLUTTER_BIN="$FLUTTER_SDK_DIR/bin/flutter"
 FLUTTER_DART_BIN="$FLUTTER_SDK_DIR/bin/dart"
 RESTART_DISPLAY=${MIRRORIAL_SKIP_RESTART:-0}
 HOST_ARCH=$(uname -m)
-FLUTTERPI_TOOL_VERSION="${MIRRORIAL_FLUTTERPI_TOOL_VERSION:-0.10.1}"
 
 case "$HOST_ARCH" in
     aarch64|arm64)
@@ -72,12 +71,9 @@ cd "$PROJECT_ROOT/display_app"
 # Ensure we use our SD-card cache for pub
 "$FLUTTER_BIN" pub get
 
-echo "🧰 Installing flutterpi_tool ${FLUTTERPI_TOOL_VERSION}..."
-"$FLUTTER_DART_BIN" pub global activate flutterpi_tool "$FLUTTERPI_TOOL_VERSION"
-
 echo "📦 Building flutter-pi release bundle..."
 rm -rf "$PROJECT_ROOT/display_app/bundle"
-"$FLUTTER_DART_BIN" pub global run flutterpi_tool build --arch="$FLUTTERPI_ARCH" --release
+"$FLUTTER_DART_BIN" run flutterpi_tool build --arch="$FLUTTERPI_ARCH" --release
 
 # 3. Validate bundle output
 echo "📁 Validating flutter-pi bundle..."
