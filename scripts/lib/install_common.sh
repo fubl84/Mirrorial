@@ -41,6 +41,11 @@ run_user_shell() {
   fi
 }
 
+is_remote_bundle_source() {
+  local source="$1"
+  [[ "$source" =~ ^https?:// ]]
+}
+
 ensure_sudo_access() {
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "ℹ️ Dry run: skipping sudo credential validation."
@@ -126,8 +131,54 @@ install_engine_and_bundle() {
     run_repo_script "$PROJECT_ROOT/scripts/install_engine.sh"
   fi
 
-  echo "🏗️ Building display bundle..."
-  run_user_shell "cd \"$PROJECT_ROOT\" && MIRRORIAL_SKIP_RESTART=1 bash \"$PROJECT_ROOT/scripts/build_display.sh\""
+  if [[ -n "${DISPLAY_BUNDLE_SOURCE:-}" ]]; then
+    echo "📦 Installing prebuilt display bundle from: $DISPLAY_BUNDLE_SOURCE"
+    install_prebuilt_display_bundle
+  else
+    echo "🏗️ Building display bundle locally..."
+    run_user_shell "cd \"$PROJECT_ROOT\" && MIRRORIAL_SKIP_RESTART=1 bash \"$PROJECT_ROOT/scripts/build_display.sh\""
+  fi
+}
+
+install_prebuilt_display_bundle() {
+  local destination="$PROJECT_ROOT/display_app"
+  local bundle_dir="$destination/bundle"
+  local source="$DISPLAY_BUNDLE_SOURCE"
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "+ [${ACTUAL_USER}] extract prebuilt bundle \"$source\" into \"$destination\""
+    return 0
+  fi
+
+  if ! is_remote_bundle_source "$source" && [[ ! -f "$source" ]]; then
+    echo "❌ Prebuilt display bundle not found: $source" >&2
+    exit 1
+  fi
+
+  if is_remote_bundle_source "$source"; then
+    run_user_shell "
+      set -euo pipefail
+      mkdir -p \"$ACTUAL_HOME/.mirrorial_tmp\"
+      archive=\$(mktemp \"$ACTUAL_HOME/.mirrorial_tmp/prebuilt-bundle.XXXXXX.tar.gz\")
+      curl -L --fail \"$source\" -o \"\$archive\"
+      rm -rf \"$bundle_dir\"
+      mkdir -p \"$destination\"
+      tar -xzf \"\$archive\" -C \"$destination\"
+      rm -f \"\$archive\"
+    "
+  else
+    run_user_shell "
+      set -euo pipefail
+      rm -rf \"$bundle_dir\"
+      mkdir -p \"$destination\"
+      tar -xzf \"$source\" -C \"$destination\"
+    "
+  fi
+
+  if [[ ! -f "$bundle_dir/app.so" ]]; then
+    echo "❌ Extracted bundle is missing app.so: $bundle_dir/app.so" >&2
+    exit 1
+  fi
 }
 
 register_services() {

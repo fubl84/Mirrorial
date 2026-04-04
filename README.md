@@ -161,6 +161,12 @@ Recommended installer command from a freshly cloned repo:
 ./scripts/install_linux.sh --no-reboot
 ```
 
+On low-memory boards such as the Raspberry Pi Zero 2 W, a prebuilt display bundle is strongly recommended over an on-device release build:
+
+```bash
+./scripts/install_linux.sh --no-reboot --display-bundle /path/to/mirrorial-display-bundle-arm64-flutterpi.tar.gz
+```
+
 Compatibility wrappers remain available:
 
 ```bash
@@ -171,6 +177,70 @@ Compatibility wrappers remain available:
 Use `--dry-run` to inspect the steps first. Use `--profile` to force a detected profile when needed. The installer is designed to run unattended, install dependencies, build the remote UI and display bundle, register services, and run a health check.
 
 For the display pipeline, Mirrorial uses `flutter-pi` plus the project-local `flutterpi_tool build` workflow to produce the deployable bundle. The Linux installer pins the Flutter SDK used for that build to a known-compatible version instead of following the latest Flutter stable release.
+
+### Prebuilt display bundles
+
+The recommended deployment workflow for slower boards is:
+
+1. Build and package `display_app/bundle` on a stronger machine.
+2. Copy or publish the resulting `.tar.gz` archive.
+3. Pass that archive to `scripts/install_linux.sh --display-bundle ...` on the target device.
+
+Build and package the bundle on the stronger machine:
+
+```bash
+./scripts/package_display_bundle.sh
+```
+
+That writes a `.tar.gz` archive under `./dist/` by default.
+
+If you already have a freshly built `display_app/bundle`, package it without rebuilding:
+
+```bash
+./scripts/package_display_bundle.sh --skip-build
+```
+
+Install from a local archive on the target device:
+
+```bash
+./scripts/install_linux.sh --no-reboot --display-bundle /absolute/path/to/mirrorial-display-bundle-arm64-flutterpi.tar.gz
+```
+
+Install from a remote archive URL on the target device:
+
+```bash
+./scripts/install_linux.sh --no-reboot --display-bundle https://example.com/mirrorial-display-bundle-arm64-flutterpi.tar.gz
+```
+
+On-device display builds remain available, but they are experimental on very small boards and may take a long time due to swap pressure.
+
+### GitHub Actions option
+
+The repository can also prepare the prebuilt display bundle in GitHub Actions.
+
+Included workflow:
+
+- `.github/workflows/build-display-bundle.yml`
+
+Behavior:
+
+- manual trigger only via `workflow_dispatch`
+- builds the `arm64` flutter-pi bundle on `ubuntu-latest`
+- uploads `mirrorial-display-bundle-arm64-flutterpi.tar.gz` as a workflow artifact
+
+Recommended usage:
+
+1. Open the `Actions` tab in GitHub.
+2. Run `Build Display Bundle`.
+3. Download the uploaded artifact.
+4. Copy it to the target Pi or host it somewhere reachable.
+5. Install with:
+
+```bash
+./scripts/install_linux.sh --no-reboot --display-bundle /absolute/path/to/mirrorial-display-bundle-arm64-flutterpi.tar.gz
+```
+
+For public repositories, standard GitHub-hosted runners are free to use, and `workflow_dispatch` runs can only be started by users with write access. See GitHub's billing docs for current details: [GitHub Actions billing](https://docs.github.com/en/billing/managing-billing-for-github-actions/about-billing-for-github-actions), [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 
 ## Testing and verification
 

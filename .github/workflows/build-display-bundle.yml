@@ -1,0 +1,37 @@
+name: Build Display Bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: Retention period for the uploaded artifact
+        required: false
+        default: "7"
+
+jobs:
+  build-display-bundle:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld
+
+      - name: Build and package flutter-pi display bundle
+        run: |
+          chmod +x ./scripts/package_display_bundle.sh
+          ./scripts/package_display_bundle.sh
+
+      - name: Upload display bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mirrorial-display-bundle-arm64-flutterpi
+          path: dist/mirrorial-display-bundle-arm64-flutterpi.tar.gz
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}

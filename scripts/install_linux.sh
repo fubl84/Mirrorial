@@ -8,6 +8,7 @@ NO_REBOOT=false
 SKIP_ENGINE=false
 SKIP_HEALTH_CHECK=false
 REQUESTED_PROFILE="auto"
+DISPLAY_BUNDLE_SOURCE=""
 
 # shellcheck source=./lib/install_common.sh
 source "$PROJECT_ROOT/scripts/lib/install_common.sh"
@@ -19,7 +20,7 @@ usage() {
 Mirrorial Linux installer
 
 Usage:
-  ./scripts/install_linux.sh [--dry-run] [--no-reboot] [--skip-engine] [--skip-health-check] [--profile PROFILE]
+  ./scripts/install_linux.sh [--dry-run] [--no-reboot] [--skip-engine] [--skip-health-check] [--profile PROFILE] [--display-bundle PATH_OR_URL]
 
 Options:
   --dry-run            Print the steps without executing them.
@@ -27,6 +28,7 @@ Options:
   --skip-engine        Skip flutter-pi installation and reuse the current engine setup.
   --skip-health-check  Skip the final service verification step.
   --profile PROFILE    Force a detected install profile. Available: rpi-bookworm, rpi-trixie, generic-debian-drm.
+  --display-bundle     Install a prebuilt display bundle archive (.tar.gz) from a local path or HTTP(S) URL instead of building on-device.
   --help               Show this message.
 EOF
 }
@@ -52,6 +54,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       REQUESTED_PROFILE="$1"
+      ;;
+    --display-bundle)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "❌ Missing value for --display-bundle" >&2
+        exit 1
+      fi
+      DISPLAY_BUNDLE_SOURCE="$1"
       ;;
     --help|-h)
       usage
@@ -80,6 +90,9 @@ print_host_report
 echo "  Install user: $ACTUAL_USER"
 echo "  Project root: $PROJECT_ROOT"
 echo "  Log file: $LOG_FILE"
+if [[ -n "$DISPLAY_BUNDLE_SOURCE" ]]; then
+  echo "  Prebuilt display bundle: $DISPLAY_BUNDLE_SOURCE"
+fi
 choose_install_profile "$REQUESTED_PROFILE"
 print_selected_profile
 ensure_sudo_access
