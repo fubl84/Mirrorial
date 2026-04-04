@@ -79,7 +79,7 @@ cd "$PROJECT_ROOT/display_app"
 
 echo "📦 Building flutter-pi release bundle..."
 rm -rf "$PROJECT_ROOT/display_app/bundle" "$PROJECT_ROOT/display_app/build/flutter_assets"
-"$FLUTTER_DART_BIN" run flutterpi_tool build --arch="$FLUTTERPI_ARCH" --release
+"$FLUTTER_DART_BIN" run flutterpi_tool build --arch="$FLUTTERPI_ARCH" --release --no-tree-shake-icons
 
 # 3. Organize bundle
 echo "📁 Organizing flutter-pi bundle..."
