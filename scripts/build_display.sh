@@ -77,8 +77,11 @@ cd "$PROJECT_ROOT/display_app"
 # Ensure we use our SD-card cache for pub
 "$FLUTTER_BIN" pub get
 
+echo "📦 Building Flutter asset bundle..."
+"$FLUTTER_BIN" build bundle --target-platform="linux-$FLUTTERPI_ARCH" --no-tree-shake-icons
+
 echo "📦 Building flutter-pi release bundle..."
-rm -rf "$PROJECT_ROOT/display_app/bundle" "$PROJECT_ROOT/display_app/build/flutter_assets"
+rm -rf "$PROJECT_ROOT/display_app/bundle"
 "$FLUTTER_DART_BIN" run flutterpi_tool build --arch="$FLUTTERPI_ARCH" --release --no-tree-shake-icons
 
 # 3. Organize bundle
