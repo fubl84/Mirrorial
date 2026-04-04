@@ -225,7 +225,7 @@ Included workflow:
 Behavior:
 
 - manual trigger only via `workflow_dispatch`
-- builds the `arm64` flutter-pi bundle on `ubuntu-latest`
+- builds the `arm64` flutter-pi bundle on `ubuntu-24.04-arm`
 - uploads `mirrorial-display-bundle-arm64-flutterpi.tar.gz` as a workflow artifact
 
 Recommended usage:
