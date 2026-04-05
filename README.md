@@ -151,8 +151,8 @@ Installer profile selection is automatic. The entrypoint detects the host and ch
 
 Support tiers:
 
-- Supported: Raspberry Pi Zero 2 W or newer on Raspberry Pi OS Bookworm 64-bit
-- Experimental: Raspberry Pi Zero 2 W or newer on Raspberry Pi OS Trixie 64-bit
+- Supported: Raspberry Pi Zero 2 W or newer on Raspberry Pi OS Trixie 64-bit, tested and verified
+- Experimental: Raspberry Pi Zero 2 W or newer on Raspberry Pi OS Bookworm 64-bit, not tested recently but expected to work
 - Experimental: other Debian-family Linux boards with `apt`, `systemd`, DRM/KMS, and `arm64` or `amd64`
 
 Recommended installer command from a freshly cloned repo:
@@ -233,8 +233,9 @@ Recommended usage:
 1. Open the `Actions` tab in GitHub.
 2. Run `Build Display Bundle`.
 3. Download the uploaded artifact.
-4. Copy it to the target Pi or host it somewhere reachable.
-5. Install with:
+4. Check the file format. If GitHub presents the artifact as a `.zip`, convert the contained bundle back to `.tar.gz` before copying it to the target device.
+5. Copy it to the target Pi or host it somewhere reachable.
+6. Install with:
 
 ```bash
 ./scripts/install_linux.sh --no-reboot --display-bundle /absolute/path/to/mirrorial-display-bundle-arm64-flutterpi.tar.gz

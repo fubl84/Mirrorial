@@ -11,7 +11,7 @@ From the repository root, use the wrapper scripts instead of calling `flutter` d
 ./scripts/check_display.sh
 ```
 
-If the wrapper cannot find a Flutter SDK, follow `/Users/christophseiler/Development/Mirrorial/FLUTTER_SETUP.md`.
+If the wrapper cannot find a Flutter SDK, follow [../FLUTTER_SETUP.md](../FLUTTER_SETUP.md).
 
 ## macOS development
 

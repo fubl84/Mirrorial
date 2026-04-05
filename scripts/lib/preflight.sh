@@ -74,18 +74,18 @@ load_profile() {
     rpi-bookworm)
       SELECTED_PROFILE_ID="rpi-bookworm"
       SELECTED_PROFILE_LABEL="Raspberry Pi OS Bookworm 64-bit"
-      SELECTED_PROFILE_TIER="supported"
-      SELECTED_PROFILE_SUMMARY="Official Raspberry Pi deployment path for Mirrorial v1."
-      SELECTED_PROFILE_NOTES="Targets Raspberry Pi Zero 2 W and newer on Bookworm 64-bit."
-      SELECTED_PROFILE_EXPERIMENTAL="false"
+      SELECTED_PROFILE_TIER="experimental"
+      SELECTED_PROFILE_SUMMARY="Legacy Raspberry Pi deployment path that should still work."
+      SELECTED_PROFILE_NOTES="Not tested recently, but expected to work on Raspberry Pi Zero 2 W and newer running Bookworm 64-bit."
+      SELECTED_PROFILE_EXPERIMENTAL="true"
       ;;
     rpi-trixie)
       SELECTED_PROFILE_ID="rpi-trixie"
       SELECTED_PROFILE_LABEL="Raspberry Pi OS Trixie 64-bit"
-      SELECTED_PROFILE_TIER="experimental"
-      SELECTED_PROFILE_SUMMARY="Current Raspberry Pi OS path using the same install flow as Bookworm."
-      SELECTED_PROFILE_NOTES="Proceed with real-device validation because package and graphics behavior may differ from Bookworm."
-      SELECTED_PROFILE_EXPERIMENTAL="true"
+      SELECTED_PROFILE_TIER="supported"
+      SELECTED_PROFILE_SUMMARY="Current tested Raspberry Pi deployment path for Mirrorial v1."
+      SELECTED_PROFILE_NOTES="Tested and verified on Raspberry Pi Zero 2 W and newer running Trixie 64-bit."
+      SELECTED_PROFILE_EXPERIMENTAL="false"
       ;;
     generic-debian-drm)
       SELECTED_PROFILE_ID="generic-debian-drm"
@@ -166,8 +166,8 @@ choose_install_profile() {
 
   echo "❌ No supported install profile matched this host." >&2
   echo "   Mirrorial currently supports:" >&2
-  echo "   - Raspberry Pi OS Bookworm 64-bit on Raspberry Pi Zero 2 W and newer" >&2
-  echo "   - Experimental Raspberry Pi OS Trixie 64-bit on Raspberry Pi devices" >&2
+  echo "   - Raspberry Pi OS Trixie 64-bit on Raspberry Pi Zero 2 W and newer" >&2
+  echo "   - Experimental Raspberry Pi OS Bookworm 64-bit on Raspberry Pi devices" >&2
   echo "   - Experimental Debian-family Linux boards with apt, systemd, DRM/KMS, and arm64/amd64" >&2
   print_host_report >&2
   exit 1

@@ -9,7 +9,7 @@ Mirrorial cannot run `flutter analyze` or build the display app unless the shell
    - put it at `$HOME/flutter`
    - export `FLUTTER_SDK_PATH=/absolute/path/to/flutter`
    - add `flutter` to your `PATH`
-   - place a project-local SDK at `/Users/christophseiler/Development/Mirrorial/.local/flutter`
+   - place a project-local SDK at `./.local/flutter`
 3. Verify the SDK is visible:
 
 ```bash

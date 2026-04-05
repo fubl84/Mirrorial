@@ -119,9 +119,9 @@ Mirrorial stores runtime data outside the repo:
 - synced calendar cache: `~/.config/mirrorial/cache/calendar-events.json`
 - derived context cache: `~/.config/mirrorial/cache/context.json`
 
-## 6. Production readiness notes
+## 6. Future production roadmap
 
-Before public release you should expect to handle:
+Planned follow-up work for future public-ready updates includes:
 
 - OAuth consent screen verification
 - privacy policy / support links for Google review
