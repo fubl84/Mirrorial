@@ -84,6 +84,18 @@ const EVENT_HINT_ROUTE_MODE_OPTIONS = [
   { id: 'walk', label: 'Walk' },
   { id: 'public_transport', label: 'Public transport' },
 ];
+const EVENT_HINT_WEATHER_RULE_OPTIONS = [
+  { id: 'none', label: 'No weather warning' },
+  { id: 'warn_rain', label: 'Warn if rain is forecast' },
+  { id: 'warn_snow', label: 'Warn if snow is forecast' },
+  { id: 'warn_rain_or_snow', label: 'Warn if rain or snow is forecast' },
+];
+const EVENT_HINT_ALT_TRANSPORT_POLICY_OPTIONS = [
+  { id: 'always', label: 'Always in active window' },
+  { id: 'bad_weather', label: 'Only when weather is bad' },
+  { id: 'tight_schedule', label: 'Only when time is tight' },
+  { id: 'manual_note', label: 'Only as a soft suggestion' },
+];
 
 const MODULE_SIZE_PRESETS = {
   clock: {
@@ -828,6 +840,7 @@ function App() {
   const [systemCapabilities, setSystemCapabilities] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [dialogState, setDialogState] = useState(null);
+  const [eventHintKeywordDrafts, setEventHintKeywordDrafts] = useState({});
   const currentEditingLayout = config?.gridLayouts?.[activeLayoutOrientation] || config?.gridLayout || null;
 
   useEffect(() => {
@@ -915,6 +928,27 @@ function App() {
     setToasts((current) => current.filter((toast) => toast.id !== toastId));
   };
 
+  const applySelectedCalendarIds = (ids = []) => {
+    const normalizedIds = Array.from(new Set((Array.isArray(ids) ? ids : []).filter(Boolean)));
+    setSelectedCalendarIds(normalizedIds);
+    setConfig((current) => {
+      if (!current) {
+        return current;
+      }
+
+      return {
+        ...current,
+        services: {
+          ...(current.services || {}),
+          google: {
+            ...(current.services?.google || {}),
+            selectedCalendarIds: normalizedIds,
+          },
+        },
+      };
+    });
+  };
+
   const pushToast = (title, message = '', tone = 'success') => {
     const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     setToasts((current) => [...current, { id, title, message, tone }]);
@@ -972,8 +1006,20 @@ function App() {
       const initialOrientation = getOrientationForResolution(displayStatusResponse.data)
         || getOrientationForResolution(PREVIEW_RESOLUTION_PRESETS[configResponse.data.system?.previewResolution])
         || 'portrait';
+      const initialSelectedCalendarIds = Array.from(new Set((
+        calendarsResponse.data?.selectedCalendarIds
+        || configResponse.data?.services?.google?.selectedCalendarIds
+        || []
+      ).filter(Boolean)));
       setConfig({
         ...configResponse.data,
+        services: {
+          ...(configResponse.data.services || {}),
+          google: {
+            ...(configResponse.data.services?.google || {}),
+            selectedCalendarIds: initialSelectedCalendarIds,
+          },
+        },
         moduleSettings,
         gridLayouts: normalizeGridLayoutsDraft(
           configResponse.data.gridLayouts,
@@ -992,6 +1038,7 @@ function App() {
       setSystemCapabilities(systemCapabilitiesResponse.data);
       setAvailableCalendars(calendarsResponse.data?.calendars || []);
       setCalendarSources(calendarSourcesResponse.data?.sources || []);
+      setSelectedCalendarIds(initialSelectedCalendarIds);
     } catch (error) {
       showErrorDialog('Failed to load settings', 'The configuration console could not fetch the current settings from the backend.');
     } finally {
@@ -1034,10 +1081,10 @@ function App() {
       if (statusResponse.data.connected) {
         const calendarsResponse = await axios.get(`${API_BASE}/google/calendars`);
         setGoogleCalendars(calendarsResponse.data.calendars || []);
-        setSelectedCalendarIds(calendarsResponse.data.selectedCalendarIds || []);
+        applySelectedCalendarIds(calendarsResponse.data.selectedCalendarIds || []);
       } else {
         setGoogleCalendars([]);
-        setSelectedCalendarIds(statusResponse.data.selectedCalendarIds || []);
+        applySelectedCalendarIds(statusResponse.data.selectedCalendarIds || []);
       }
       refreshCalendarState();
     } catch (error) {
@@ -1475,7 +1522,10 @@ function App() {
     personLabel: '',
     locationLabel: '',
     locationAddress: '',
-    additionalInfo: '',
+    prepNotes: '',
+    weatherRule: 'none',
+    freeformContext: '',
+    alternativeTransportOptions: [],
     arriveEarlyMinutes: 0,
     originType: 'home',
     originReferenceId: '',
@@ -1518,6 +1568,58 @@ function App() {
     updateConfig((draft) => {
       draft.services.context.eventHintRules = (draft.services.context.eventHintRules || []).map((rule) => (
         rule.id === ruleId ? { ...rule, ...changes } : rule
+      ));
+      return draft;
+    });
+  };
+
+  const addEventHintAlternativeTransport = (ruleId) => {
+    updateConfig((draft) => {
+      draft.services.context.eventHintRules = (draft.services.context.eventHintRules || []).map((rule) => (
+        rule.id === ruleId
+          ? {
+            ...rule,
+            alternativeTransportOptions: [
+              ...(rule.alternativeTransportOptions || []),
+              {
+                id: `hint_alt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                label: '',
+                showPolicy: 'always',
+                reminderText: '',
+              },
+            ],
+          }
+          : rule
+      ));
+      return draft;
+    });
+  };
+
+  const updateEventHintAlternativeTransport = (ruleId, optionId, changes) => {
+    updateConfig((draft) => {
+      draft.services.context.eventHintRules = (draft.services.context.eventHintRules || []).map((rule) => (
+        rule.id === ruleId
+          ? {
+            ...rule,
+            alternativeTransportOptions: (rule.alternativeTransportOptions || []).map((option) => (
+              option.id === optionId ? { ...option, ...changes } : option
+            )),
+          }
+          : rule
+      ));
+      return draft;
+    });
+  };
+
+  const removeEventHintAlternativeTransport = (ruleId, optionId) => {
+    updateConfig((draft) => {
+      draft.services.context.eventHintRules = (draft.services.context.eventHintRules || []).map((rule) => (
+        rule.id === ruleId
+          ? {
+            ...rule,
+            alternativeTransportOptions: (rule.alternativeTransportOptions || []).filter((option) => option.id !== optionId),
+          }
+          : rule
       ));
       return draft;
     });
@@ -1919,7 +2021,8 @@ function App() {
   const saveCalendarSelection = async () => {
     setCalendarSaving(true);
     try {
-      await axios.post(`${API_BASE}/google/calendars/select`, { selectedCalendarIds });
+      const response = await axios.post(`${API_BASE}/google/calendars/select`, { selectedCalendarIds });
+      applySelectedCalendarIds(response.data?.selectedCalendarIds || selectedCalendarIds);
       await refreshGoogleState();
       pushToast('Calendar selection saved', 'Google calendar selection has been updated.', 'success');
     } catch (error) {
@@ -3459,11 +3562,10 @@ function App() {
                                 type="checkbox"
                                 checked={selectedCalendarIds.includes(calendar.id)}
                                 onChange={(event) => {
-                                  if (event.target.checked) {
-                                    setSelectedCalendarIds((current) => Array.from(new Set([...current, calendar.id])));
-                                  } else {
-                                    setSelectedCalendarIds((current) => current.filter((id) => id !== calendar.id));
-                                  }
+                                  const nextIds = event.target.checked
+                                    ? Array.from(new Set([...selectedCalendarIds, calendar.id]))
+                                    : selectedCalendarIds.filter((id) => id !== calendar.id);
+                                  applySelectedCalendarIds(nextIds);
                                 }}
                               />
                             </div>
@@ -3989,13 +4091,26 @@ function App() {
                                     <input
                                       type="text"
                                       placeholder="Infusion, Physio"
-                                      value={(rule.keywords || []).join(', ')}
-                                      onChange={(event) => updateEventHintRule(rule.id, {
-                                        keywords: event.target.value
-                                          .split(/[\n,]/g)
-                                          .map((entry) => entry.trim())
-                                          .filter(Boolean),
-                                      })}
+                                      value={Object.prototype.hasOwnProperty.call(eventHintKeywordDrafts, rule.id)
+                                        ? eventHintKeywordDrafts[rule.id]
+                                        : (rule.keywords || []).join(', ')}
+                                      onChange={(event) => setEventHintKeywordDrafts((current) => ({
+                                        ...current,
+                                        [rule.id]: event.target.value,
+                                      }))}
+                                      onBlur={(event) => {
+                                        updateEventHintRule(rule.id, {
+                                          keywords: event.target.value
+                                            .split(/[\n,]/g)
+                                            .map((entry) => entry.trim())
+                                            .filter(Boolean),
+                                        });
+                                        setEventHintKeywordDrafts((current) => {
+                                          const next = { ...current };
+                                          delete next[rule.id];
+                                          return next;
+                                        });
+                                      }}
                                       className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
                                     />
                                     <div className="mt-2 text-xs text-slate-500">Important field. Add one or more title keywords, separated by commas. Matching ignores upper/lowercase.</div>
@@ -4085,15 +4200,119 @@ function App() {
                                 </div>
 
                                 <div>
-                                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Additional Helpful Details</label>
+                                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Prep / Helpful Notes</label>
                                   <textarea
-                                    rows={4}
-                                    placeholder="Wife, regular infusion treatment, needs to bring insurance card, usually checks in at reception."
-                                    value={rule.additionalInfo || ''}
-                                    onChange={(event) => updateEventHintRule(rule.id, { additionalInfo: event.target.value })}
+                                  rows={4}
+                                    placeholder="Bring insurance card, check in at reception, paperwork takes a few minutes."
+                                    value={rule.prepNotes || ''}
+                                    onChange={(event) => updateEventHintRule(rule.id, { prepNotes: event.target.value })}
                                     className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
                                   />
-                                  <div className="mt-2 text-xs text-slate-500">Add facts a human in the household already knows. Good examples: purpose, clinic name, building, documents to bring, usual preparation steps, or a more meaningful description of the event.</div>
+                                  <div className="mt-2 text-xs text-slate-500">Static household knowledge only. Good examples: documents to bring, check-in habits, or what the appointment is about.</div>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Weather Rule</label>
+                                    <select
+                                      value={rule.weatherRule || 'none'}
+                                      onChange={(event) => updateEventHintRule(rule.id, { weatherRule: event.target.value })}
+                                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                    >
+                                      {EVENT_HINT_WEATHER_RULE_OPTIONS.map((option) => (
+                                        <option key={option.id} value={option.id}>{option.label}</option>
+                                      ))}
+                                    </select>
+                                    <div className="mt-2 text-xs text-slate-500">This is interpreted by the backend. The mirror will check the forecast instead of repeating your instruction text.</div>
+                                  </div>
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Fallback / Free Note</label>
+                                    <textarea
+                                      rows={4}
+                                      placeholder="Optional extra context that does not fit the structured fields above."
+                                      value={rule.freeformContext || ''}
+                                      onChange={(event) => updateEventHintRule(rule.id, { freeformContext: event.target.value })}
+                                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                    />
+                                    <div className="mt-2 text-xs text-slate-500">Use sparingly. Prefer the structured fields so Mirrorial can make better decisions.</div>
+                                  </div>
+                                </div>
+
+                                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 space-y-4">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                      <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">Alternative Transport Options</div>
+                                      <div className="mt-2 text-sm text-slate-400">Optional. Add household-specific alternatives like MOIA, Taxi, or asking family for a ride. These are reminders, not hard-coded route modes.</div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => addEventHintAlternativeTransport(rule.id)}
+                                      className="inline-flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 transition-all hover:border-[#ff8bbf] hover:text-white"
+                                    >
+                                      <Plus size={14} />
+                                      Add option
+                                    </button>
+                                  </div>
+
+                                  {(rule.alternativeTransportOptions || []).length === 0 && (
+                                    <div className="rounded-xl border border-dashed border-slate-800 bg-slate-950/40 px-4 py-3 text-sm text-slate-500">
+                                      No alternative transport option yet. Example labels: MOIA, Taxi, Ride with family.
+                                    </div>
+                                  )}
+
+                                  <div className="space-y-3">
+                                    {(rule.alternativeTransportOptions || []).map((option) => (
+                                      <div key={option.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 space-y-4">
+                                        <div className="flex items-start justify-between gap-3">
+                                          <div className="text-sm font-semibold text-white">{option.label || 'New transport option'}</div>
+                                          <button
+                                            type="button"
+                                            onClick={() => removeEventHintAlternativeTransport(rule.id, option.id)}
+                                            className="text-slate-500 transition-colors hover:text-red-400"
+                                          >
+                                            <Trash2 size={16} />
+                                          </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                          <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Option Label</label>
+                                            <input
+                                              type="text"
+                                              placeholder="MOIA"
+                                              value={option.label || ''}
+                                              onChange={(event) => updateEventHintAlternativeTransport(rule.id, option.id, { label: event.target.value })}
+                                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                            />
+                                          </div>
+                                          <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Show Reminder</label>
+                                            <select
+                                              value={option.showPolicy || 'always'}
+                                              onChange={(event) => updateEventHintAlternativeTransport(rule.id, option.id, { showPolicy: event.target.value })}
+                                              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                            >
+                                              {EVENT_HINT_ALT_TRANSPORT_POLICY_OPTIONS.map((policy) => (
+                                                <option key={policy.id} value={policy.id}>{policy.label}</option>
+                                              ))}
+                                            </select>
+                                          </div>
+                                        </div>
+
+                                        <div>
+                                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Reminder Text</label>
+                                          <input
+                                            type="text"
+                                            placeholder="Denk daran, das MOIA vorzubestellen!"
+                                            value={option.reminderText || ''}
+                                            onChange={(event) => updateEventHintAlternativeTransport(rule.id, option.id, { reminderText: event.target.value })}
+                                            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                          />
+                                          <div className="mt-2 text-xs text-slate-500">Shown as an actionable reminder inside the active 24-hour window.</div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
                                 </div>
 
                                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 space-y-4">

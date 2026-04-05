@@ -38,6 +38,9 @@ const DEFAULT_CONTEXT_REFRESH_MINUTES = 180;
 const EVENT_HINT_RULE_CATEGORIES = new Set(['generic', 'medical', 'prep', 'travel', 'pickup']);
 const EVENT_HINT_RULE_ORIGIN_TYPES = new Set(['home', 'custom', 'saved_place', 'member_work', 'member_school']);
 const EVENT_HINT_RULE_ROUTE_MODES = new Set(['car', 'bike', 'walk', 'public_transport']);
+const EVENT_HINT_WEATHER_RULES = new Set(['none', 'warn_rain', 'warn_snow', 'warn_rain_or_snow']);
+const EVENT_HINT_ALT_TRANSPORT_POLICIES = new Set(['always', 'bad_weather', 'tight_schedule', 'manual_note']);
+const EVENT_HINT_ACTIVE_WINDOW_HOURS = 24;
 
 const resolveContextRefreshMinutes = (contextConfig = {}) => {
   const explicitMinutes = Number(contextConfig?.refreshMinutes);
@@ -2313,9 +2316,41 @@ const normalizeEventHintKeywords = (value) => {
     .filter(Boolean)));
 };
 
+const normalizeEventHintWeatherRule = (value) => {
+  const normalized = `${value || ''}`.trim().toLowerCase();
+  return EVENT_HINT_WEATHER_RULES.has(normalized) ? normalized : 'none';
+};
+
+const normalizeEventHintAlternativeTransportOptions = (value) => (Array.isArray(value) ? value : [])
+  .map((option, index) => {
+    const label = typeof option?.label === 'string' ? option.label.trim() : '';
+    const reminderText = typeof option?.reminderText === 'string' ? option.reminderText.trim() : '';
+    const showPolicy = EVENT_HINT_ALT_TRANSPORT_POLICIES.has(`${option?.showPolicy || ''}`.trim().toLowerCase())
+      ? `${option.showPolicy}`.trim().toLowerCase()
+      : 'always';
+
+    if (!label && !reminderText) {
+      return null;
+    }
+
+    return {
+      id: typeof option?.id === 'string' && option.id.trim() ? option.id.trim() : `event_hint_alt_${index + 1}`,
+      label,
+      reminderText,
+      showPolicy,
+    };
+  })
+  .filter(Boolean);
+
 const normalizeEventHintRules = (rawRules = []) => (Array.isArray(rawRules) ? rawRules : [])
   .map((rule, index) => {
     const arriveEarlyMinutes = Number(rule?.arriveEarlyMinutes);
+    const prepNotes = typeof rule?.prepNotes === 'string' && rule.prepNotes.trim()
+      ? rule.prepNotes.trim()
+      : (typeof rule?.additionalInfo === 'string' ? rule.additionalInfo.trim() : '');
+    const freeformContext = typeof rule?.freeformContext === 'string' && rule.freeformContext.trim()
+      ? rule.freeformContext.trim()
+      : '';
     return {
       id: typeof rule?.id === 'string' && rule.id.trim() ? rule.id.trim() : `event_hint_${index + 1}`,
       enabled: rule?.enabled !== false,
@@ -2325,7 +2360,11 @@ const normalizeEventHintRules = (rawRules = []) => (Array.isArray(rawRules) ? ra
       personLabel: typeof rule?.personLabel === 'string' ? rule.personLabel.trim() : '',
       locationLabel: typeof rule?.locationLabel === 'string' ? rule.locationLabel.trim() : '',
       locationAddress: typeof rule?.locationAddress === 'string' ? rule.locationAddress.trim() : '',
+      prepNotes,
+      freeformContext,
       additionalInfo: typeof rule?.additionalInfo === 'string' ? rule.additionalInfo.trim() : '',
+      weatherRule: normalizeEventHintWeatherRule(rule?.weatherRule),
+      alternativeTransportOptions: normalizeEventHintAlternativeTransportOptions(rule?.alternativeTransportOptions),
       arriveEarlyMinutes: Number.isFinite(arriveEarlyMinutes) && arriveEarlyMinutes > 0
         ? Math.min(480, Math.round(arriveEarlyMinutes))
         : 0,
@@ -2374,7 +2413,9 @@ const findMatchingEventHintRule = (event, config) => {
 
       const score = (matchedKeyword.normalized.length * 10)
         + (rule.locationAddress ? 4 : 0)
-        + (rule.additionalInfo ? 3 : 0)
+        + (rule.prepNotes ? 3 : 0)
+        + (rule.alternativeTransportOptions?.length ? 2 : 0)
+        + (rule.weatherRule && rule.weatherRule !== 'none' ? 2 : 0)
         + (rule.personLabel ? 2 : 0)
         + (rule.arriveEarlyMinutes > 0 ? 1 : 0);
 
@@ -2994,7 +3035,16 @@ const calculateDistanceKm = (origin, destination) => {
   return Math.round(earthRadiusKm * c);
 };
 
-const buildRoutingCacheKey = ({ origin, destination, originPlace = null, destinationPlace = null, provider, profile, mode }) => {
+const buildRoutingCacheKey = ({
+  origin,
+  destination,
+  originPlace = null,
+  destinationPlace = null,
+  provider,
+  profile,
+  mode,
+  timeContext = '',
+}) => {
   const originToken = origin
     ? `${origin.latitude}:${origin.longitude}`
     : `addr:${normalizeAddressKey(originPlace?.address || '')}`;
@@ -3008,6 +3058,7 @@ const buildRoutingCacheKey = ({ origin, destination, originPlace = null, destina
     mode || 'car',
     originToken,
     destinationToken,
+    timeContext || 'default',
   ].join(':');
 };
 
@@ -3186,7 +3237,16 @@ const buildGoogleWaypoint = (location, place) => {
   return null;
 };
 
-const fetchGoogleRoutesEstimate = async ({ origin, destination, originPlace = null, destinationPlace = null, routingSecrets, mode = 'car' }) => {
+const fetchGoogleRoutesEstimate = async ({
+  origin,
+  destination,
+  originPlace = null,
+  destinationPlace = null,
+  routingSecrets,
+  mode = 'car',
+  arrivalTime = null,
+  departureTime = null,
+}) => {
   const travelMode = mapGoogleTravelMode(mode);
   const originWaypoint = buildGoogleWaypoint(origin, originPlace);
   const destinationWaypoint = buildGoogleWaypoint(destination, destinationPlace);
@@ -3199,9 +3259,14 @@ const fetchGoogleRoutesEstimate = async ({ origin, destination, originPlace = nu
     travelMode,
     units: 'METRIC',
     languageCode: 'en-GB',
-    departureTime: new Date().toISOString(),
     regionCode: 'de',
   };
+
+  if (travelMode === 'TRANSIT' && arrivalTime) {
+    body.arrivalTime = arrivalTime;
+  } else {
+    body.departureTime = departureTime || new Date().toISOString();
+  }
 
   if (travelMode === 'DRIVE') {
     body.routingPreference = 'TRAFFIC_AWARE_OPTIMAL';
@@ -3277,7 +3342,18 @@ const resolveRoutingProviderForMode = (routingConfig, routingSecrets, mode = 'ca
   return 'estimated';
 };
 
-const getRouteEstimate = async ({ origin, destination, originPlace = null, destinationPlace = null, routingConfig, routingSecrets, routingCache, mode = 'auto' }) => {
+const getRouteEstimate = async ({
+  origin,
+  destination,
+  originPlace = null,
+  destinationPlace = null,
+  routingConfig,
+  routingSecrets,
+  routingCache,
+  mode = 'auto',
+  arrivalTime = null,
+  departureTime = null,
+}) => {
   if ((!origin && !originPlace?.address) || (!destination && !destinationPlace?.address)) {
     return null;
   }
@@ -3294,6 +3370,7 @@ const getRouteEstimate = async ({ origin, destination, originPlace = null, desti
     provider: effectiveProvider,
     profile,
     mode: normalizeTravelMode(mode),
+    timeContext: arrivalTime || departureTime || '',
   });
   const refreshMinutes = Number(routingConfig.refreshMinutes) || 30;
   const cachedEntry = routingCache.entries?.[cacheKey];
@@ -3317,6 +3394,8 @@ const getRouteEstimate = async ({ origin, destination, originPlace = null, desti
         destinationPlace,
         routingSecrets,
         mode,
+        arrivalTime,
+        departureTime,
       });
     } else if (effectiveProvider === 'openrouteservice') {
       route = await fetchOpenRouteServiceEstimate(origin, destination, routingConfig, routingSecrets);
@@ -5234,6 +5313,29 @@ const buildSelectionSignals = (event, sourceEvents = [], config = null) => {
   };
 };
 
+const getEventHintTimingWindow = (event, now = Date.now()) => {
+  const startMs = new Date(event?.start).getTime();
+  if (Number.isNaN(startMs)) {
+    return {
+      startMs: null,
+      hoursUntilStart: null,
+      withinActiveWindow: false,
+      isSameDay: false,
+    };
+  }
+
+  const hoursUntilStart = Math.max(0, (startMs - now) / 3600000);
+  const eventDayKey = getEventDayKey(event?.start);
+  const nowDayKey = new Date(now).toISOString().slice(0, 10);
+
+  return {
+    startMs,
+    hoursUntilStart,
+    withinActiveWindow: hoursUntilStart <= EVENT_HINT_ACTIVE_WINDOW_HOURS,
+    isSameDay: eventDayKey === nowDayKey,
+  };
+};
+
 const buildHeuristicLlmSelection = (sourceEvents, config = null) => ({
   items: sourceEvents.map((event) => {
     const enrichmentType = detectSuggestedEnrichmentType(event);
@@ -5620,10 +5722,15 @@ const describeEventHintCategory = (category = 'generic') => {
   }
 };
 
-const buildInsightFactsFromEventHintRule = (eventHintRule) => {
+const buildInsightFactsFromEventHintRule = (eventHintRule, event) => {
   if (!eventHintRule) {
     return null;
   }
+
+  const timing = getEventHintTimingWindow(event);
+  const hasOperationalHints = eventHintRule.weatherRule !== 'none'
+    || (eventHintRule.alternativeTransportOptions || []).length > 0
+    || Boolean(eventHintRule.locationAddress);
 
   const addedFacts = uniqueTexts([
     eventHintRule.matchedKeyword ? `Matched household keyword: ${eventHintRule.matchedKeyword}.` : '',
@@ -5632,7 +5739,11 @@ const buildInsightFactsFromEventHintRule = (eventHintRule) => {
     eventHintRule.locationLabel ? `Known destination: ${eventHintRule.locationLabel}.` : '',
     eventHintRule.locationAddress ? `Known destination address: ${eventHintRule.locationAddress}.` : '',
     eventHintRule.arriveEarlyMinutes > 0 ? `Plan to arrive about ${eventHintRule.arriveEarlyMinutes} min early.` : '',
-    eventHintRule.additionalInfo ? `User-provided context: ${eventHintRule.additionalInfo}.` : '',
+    eventHintRule.prepNotes ? `Known prep note: ${eventHintRule.prepNotes}.` : '',
+    eventHintRule.freeformContext ? `Known household context: ${eventHintRule.freeformContext}.` : '',
+    hasOperationalHints && !timing.withinActiveWindow
+      ? `Detailed travel, weather, and reminder checks become useful in the last ${EVENT_HINT_ACTIVE_WINDOW_HOURS} hours before the event.`
+      : '',
   ]);
 
   return addedFacts.length > 0
@@ -5654,8 +5765,8 @@ const buildEventHintRouteFacts = async ({
     return null;
   }
 
-  const startMs = new Date(event.start).getTime();
-  if (Number.isNaN(startMs)) {
+  const timing = getEventHintTimingWindow(event);
+  if (!timing.withinActiveWindow || !Number.isFinite(timing.startMs)) {
     return null;
   }
 
@@ -5686,6 +5797,8 @@ const buildEventHintRouteFacts = async ({
   }
 
   const mode = normalizeTravelMode(eventHintRule.transportMode || 'car');
+  const arrivalBufferMinutes = Number(eventHintRule.arriveEarlyMinutes) || 0;
+  const targetArrivalTimestamp = timing.startMs - (arrivalBufferMinutes * 60000);
   const route = await getRouteEstimate({
     origin: hasResolvedLocation(origin) ? origin.location : null,
     destination: hasResolvedLocation(destination) ? destination.location : null,
@@ -5695,6 +5808,9 @@ const buildEventHintRouteFacts = async ({
     routingSecrets,
     routingCache,
     mode,
+    arrivalTime: mode === 'public_transport' && targetArrivalTimestamp > Date.now()
+      ? new Date(targetArrivalTimestamp).toISOString()
+      : null,
   });
 
   if (!route?.durationMinutes) {
@@ -5702,8 +5818,7 @@ const buildEventHintRouteFacts = async ({
   }
 
   const travelMinutes = Math.max(1, Math.round(route.durationMinutes));
-  const arrivalBufferMinutes = Number(eventHintRule.arriveEarlyMinutes) || 0;
-  const leaveByTimestamp = startMs - ((travelMinutes + arrivalBufferMinutes) * 60000);
+  const leaveByTimestamp = timing.startMs - ((travelMinutes + arrivalBufferMinutes) * 60000);
   const routeModeLabel = mode === 'public_transport'
     ? 'public transport'
     : mode;
@@ -5728,7 +5843,141 @@ const buildEventHintRouteFacts = async ({
   ]);
 
   return addedFacts.length > 0
-    ? { type: eventHintRule.enrichmentType, sources: ['event_hint_route'], addedFacts }
+    ? {
+      type: eventHintRule.enrichmentType,
+      sources: ['event_hint_route'],
+      addedFacts,
+      routeDurationMinutes: travelMinutes,
+    }
+    : null;
+};
+
+const weatherRuleMatchesBucket = (weatherRule, bucket) => {
+  if (!weatherRule || weatherRule === 'none' || !bucket) {
+    return false;
+  }
+  if (weatherRule === 'warn_rain') {
+    return ['rain', 'showers', 'stormy'].includes(bucket);
+  }
+  if (weatherRule === 'warn_snow') {
+    return bucket === 'snow';
+  }
+  if (weatherRule === 'warn_rain_or_snow') {
+    return ['rain', 'showers', 'stormy', 'snow'].includes(bucket);
+  }
+  return false;
+};
+
+const buildEventHintWeatherFacts = async ({
+  event,
+  eventHintRule,
+  household,
+  config,
+  routingConfig,
+  routingSecrets,
+  geocodeCache,
+}) => {
+  if (!eventHintRule || eventHintRule.weatherRule === 'none' || event?.isAllDay || !eventHintRule.locationAddress) {
+    return null;
+  }
+
+  const timing = getEventHintTimingWindow(event);
+  if (!timing.withinActiveWindow) {
+    return null;
+  }
+
+  const destination = await resolveTravelAnchorPlace({
+    referenceType: 'custom',
+    label: eventHintRule.locationLabel || event.title || eventHintRule.matchedKeyword || 'Destination',
+    address: eventHintRule.locationAddress || '',
+    household,
+    config,
+    geocodeCache,
+    routingConfig,
+    routingSecrets,
+  });
+
+  if (!destination || !hasResolvedLocation(destination)) {
+    return null;
+  }
+
+  const weather = await tryFetchForecastForLocation(destination.location, new Date(event.start), new Date(event.end));
+  const forecast = weather?.forecast || null;
+  const bucket = forecast?.weatherCode !== undefined && forecast?.weatherCode !== null
+    ? weatherCodeToBucket(forecast.weatherCode)
+    : '';
+
+  if (!weatherRuleMatchesBucket(eventHintRule.weatherRule, bucket)) {
+    return null;
+  }
+
+  const destinationLabel = destination.label || eventHintRule.locationLabel || event.title || 'the destination';
+  const weatherAction = bucket === 'snow'
+    ? 'Dress warmly and allow a little extra time.'
+    : 'Take an umbrella just in case.';
+
+  const addedFacts = uniqueTexts([
+    `Forecast near ${destinationLabel} suggests ${forecast?.label || bucket} around the appointment.`,
+    `Weather action: ${weatherAction}`,
+  ]);
+
+  return addedFacts.length > 0
+    ? { type: eventHintRule.enrichmentType, sources: ['event_hint_weather'], addedFacts, weatherBucket: bucket }
+    : null;
+};
+
+const alternativeTransportShouldShow = ({ option, weatherFacts, routeFacts, event }) => {
+  const policy = option?.showPolicy || 'always';
+  if (policy === 'always' || policy === 'manual_note') {
+    return true;
+  }
+  if (policy === 'bad_weather') {
+    return Boolean(weatherFacts?.weatherBucket);
+  }
+  if (policy === 'tight_schedule') {
+    const timing = getEventHintTimingWindow(event);
+    const routeMinutes = Number(routeFacts?.routeDurationMinutes) || 0;
+    return routeMinutes >= 35 || (timing.hoursUntilStart !== null && timing.hoursUntilStart <= 2.5);
+  }
+  return false;
+};
+
+const buildEventHintAlternativeTransportFacts = ({
+  event,
+  eventHintRule,
+  weatherFacts,
+  routeFacts,
+}) => {
+  if (!eventHintRule || event?.isAllDay) {
+    return null;
+  }
+
+  const timing = getEventHintTimingWindow(event);
+  if (!timing.withinActiveWindow || !Array.isArray(eventHintRule.alternativeTransportOptions) || eventHintRule.alternativeTransportOptions.length === 0) {
+    return null;
+  }
+
+  const eligibleOptions = eventHintRule.alternativeTransportOptions.filter((option) => alternativeTransportShouldShow({
+    option,
+    weatherFacts,
+    routeFacts,
+    event,
+  }));
+
+  if (eligibleOptions.length === 0) {
+    return null;
+  }
+
+  const primaryOption = eligibleOptions[0];
+  const primaryReminder = primaryOption.reminderText
+    || (primaryOption.label ? `Remember to pre-book ${primaryOption.label}.` : '');
+  const addedFacts = uniqueTexts([
+    ...eligibleOptions.map((option) => option.label ? `Alternative transport option available: ${option.label}.` : ''),
+    primaryReminder ? `Primary action: ${primaryReminder}` : '',
+  ]);
+
+  return addedFacts.length > 0
+    ? { type: eventHintRule.enrichmentType, sources: ['event_hint_alternative_transport'], addedFacts }
     : null;
 };
 
@@ -5758,7 +6007,7 @@ const buildEnrichedBriefInsights = ({
       const contextual = buildInsightFactsFromContext(event, activeTrip, recentTrip, commuteContext, householdEventContext);
       const metadata = buildInsightFactsFromEventDetails(event, suggestedType);
       const schedule = buildInsightFactsFromScheduleContext(event, sourceEvents);
-      const eventHint = buildInsightFactsFromEventHintRule(eventHintRule);
+      const eventHint = buildInsightFactsFromEventHintRule(eventHintRule, event);
       const addedFacts = uniqueTexts([
         ...(contextual?.addedFacts || []),
         ...(metadata?.addedFacts || []),
@@ -5823,7 +6072,7 @@ const augmentInsightsWithEventHintRoutes = async ({
   }
 
   const eventMap = new Map(sourceEvents.map((event) => [event.id, event]));
-  const routeFactsByEventId = new Map();
+  const operationalFactsByEventId = new Map();
 
   for (const insight of insights) {
     const event = eventMap.get(insight.eventId);
@@ -5838,32 +6087,48 @@ const augmentInsightsWithEventHintRoutes = async ({
       geocodeCache,
       routingCache,
     });
+    const weatherFacts = await buildEventHintWeatherFacts({
+      event,
+      eventHintRule,
+      household,
+      config,
+      routingConfig,
+      routingSecrets,
+      geocodeCache,
+    });
+    const alternativeTransportFacts = buildEventHintAlternativeTransportFacts({
+      event,
+      eventHintRule,
+      weatherFacts,
+      routeFacts,
+    });
 
-    if (routeFacts) {
-      routeFactsByEventId.set(insight.eventId, routeFacts);
+    const operationalFacts = [routeFacts, weatherFacts, alternativeTransportFacts].filter(Boolean);
+    if (operationalFacts.length > 0) {
+      operationalFactsByEventId.set(insight.eventId, operationalFacts);
     }
   }
 
-  if (routeFactsByEventId.size === 0) {
+  if (operationalFactsByEventId.size === 0) {
     return { insights, insightDebug };
   }
 
   const mergeFacts = (entry) => {
-    const routeFacts = routeFactsByEventId.get(entry.eventId);
-    if (!routeFacts) {
+    const factEntries = operationalFactsByEventId.get(entry.eventId);
+    if (!factEntries?.length) {
       return entry;
     }
 
     return {
       ...entry,
-      enrichmentType: routeFacts.type || entry.enrichmentType,
+      enrichmentType: factEntries.find((fact) => fact?.type)?.type || entry.enrichmentType,
       addedFacts: uniqueTexts([
         ...(entry.addedFacts || []),
-        ...(routeFacts.addedFacts || []),
+        ...factEntries.flatMap((fact) => fact?.addedFacts || []),
       ]),
       sources: Array.from(new Set([
         ...(entry.sources || []),
-        ...(routeFacts.sources || []),
+        ...factEntries.flatMap((fact) => fact?.sources || []),
       ])),
     };
   };
@@ -5893,10 +6158,12 @@ const buildLlmComposerPrompt = ({ insights, config }) => {
     '- Maximum 4 bullets.',
     '- Keep each bullet under 110 characters.',
     '- Write all user-facing text in the display locale. If displayLocale is de, the headline and bullets must be German.',
+    '- Use warm, helpful family-assistant wording. Medical items should sound calm, supportive, and caring.',
     '- Do not restate a calendar title/time by itself.',
     '- Mention an event only when you add specific value from addedFacts.',
     '- Use only facts from addedFacts. Do not guess or browse.',
     '- Prefer actionable value such as missing details, tight schedule pressure, route/weather implications, or prep needs.',
+    '- householdView is optional and should contain only one clear, actionable reminder. Leave it empty if there is no strong action.',
     '- If no insight contains meaningful added value, return an empty bullets array and an empty householdView.',
     '- Output one JSON object and nothing else.',
     JSON.stringify(promptPayload, null, 2),
@@ -5960,6 +6227,32 @@ const filterLlmBriefAgainstInsights = (brief, insights) => {
     bullets: filteredBullets,
     householdView: filteredHouseholdView,
   };
+};
+
+const stripActionPrefix = (value) => `${value || ''}`
+  .replace(/^Primary action:\s*/i, '')
+  .replace(/^Weather action:\s*/i, '')
+  .replace(/^Action reminder:\s*/i, '')
+  .trim();
+
+const derivePrimaryActionFromInsights = (insights = []) => {
+  const candidates = [];
+
+  insights.forEach((insight) => {
+    (insight.addedFacts || []).forEach((fact) => {
+      if (/^Primary action:\s*/i.test(fact)) {
+        candidates.push({ priority: 1, text: stripActionPrefix(fact) });
+      } else if (/^Weather action:\s*/i.test(fact)) {
+        candidates.push({ priority: 2, text: stripActionPrefix(fact) });
+      } else if (/^Action reminder:\s*/i.test(fact)) {
+        candidates.push({ priority: 3, text: stripActionPrefix(fact) });
+      }
+    });
+  });
+
+  return candidates
+    .filter((candidate) => candidate.text)
+    .sort((left, right) => left.priority - right.priority)[0]?.text || '';
 };
 
 const extractTextContent = (value) => {
@@ -6498,12 +6791,17 @@ const generateLlmBrief = async ({
         },
       };
     }
+    const primaryAction = derivePrimaryActionFromInsights(insights);
+    const nextBrief = {
+      ...filteredBrief,
+      householdView: primaryAction || '',
+    };
 
     return {
       updatedAt: new Date().toISOString(),
       provider,
       status: 'ready',
-      brief: filteredBrief,
+      brief: nextBrief,
       debug: {
         provider,
         model,
@@ -6526,7 +6824,7 @@ const generateLlmBrief = async ({
         composerRawResponse: composerRawText,
         composerProviderPayload,
         parsedBrief: parsed,
-        filteredBrief,
+        filteredBrief: nextBrief,
       },
     };
   } catch (error) {
@@ -7398,6 +7696,7 @@ module.exports = {
   buildDailyBrief,
   buildEnrichedBriefInsights,
   buildHeuristicLlmSelection,
+  derivePrimaryActionFromInsights,
   estimateRouteFallback,
   filterEventsForDailyBrief,
   filterLlmBriefAgainstInsights,

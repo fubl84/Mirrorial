@@ -8,6 +8,7 @@ const {
   buildDailyBrief,
   buildEnrichedBriefInsights,
   buildHeuristicLlmSelection,
+  derivePrimaryActionFromInsights,
   estimateRouteFallback,
   filterEventsForDailyBrief,
   filterLlmBriefAgainstInsights,
@@ -263,6 +264,38 @@ test('normalizeConfig keeps shared travel time module settings and applies them 
   assert.equal(normalized.moduleSettings.travel_time.items.length, 1);
   assert.equal(normalized.gridLayout.modules[0].config.items.length, 1);
   assert.equal(normalized.gridLayout.modules[0].config.items[0].label, 'Office');
+});
+
+test('normalizeConfig preserves structured event hint fields and migrates legacy additional info', () => {
+  const normalized = normalizeConfig({
+    services: {
+      context: {
+        eventHintRules: [
+          {
+            id: 'hint_1',
+            keywords: ['Israelitisches'],
+            category: 'medical',
+            additionalInfo: 'Bring insurance card.',
+            weatherRule: 'warn_rain',
+            alternativeTransportOptions: [
+              {
+                id: 'alt_1',
+                label: 'MOIA',
+                showPolicy: 'always',
+                reminderText: 'Denk daran, das MOIA vorzubestellen!',
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const [rule] = normalized.services.context.eventHintRules;
+  assert.equal(rule.prepNotes, 'Bring insurance card.');
+  assert.equal(rule.weatherRule, 'warn_rain');
+  assert.equal(rule.alternativeTransportOptions[0].label, 'MOIA');
+  assert.equal(rule.alternativeTransportOptions[0].reminderText, 'Denk daran, das MOIA vorzubestellen!');
 });
 
 test('normalizeConfig merges travel settings into legacy transport and routing compatibility blocks', () => {
@@ -803,6 +836,83 @@ test('buildEnrichedBriefInsights includes user-provided event hint facts for spa
   assert.ok(insights[0].addedFacts.some((fact) => /Known destination: City Medical Center/i.test(fact)));
   assert.ok(insights[0].addedFacts.some((fact) => /arrive about 15 min early/i.test(fact)));
   assert.ok(insights[0].addedFacts.some((fact) => /Regular infusion treatment/i.test(fact)));
+});
+
+test('buildEnrichedBriefInsights keeps operational hint checks out of far-future event facts', () => {
+  const sourceEvents = [
+    {
+      id: 'clinic_evt',
+      title: 'Clinic appointment',
+      start: isoFromNow(48),
+      end: isoFromNow(49),
+      isAllDay: false,
+      isRecurring: false,
+      calendarId: 'family',
+      calendarSummary: 'Family',
+      description: '',
+      location: '',
+    },
+  ];
+
+  const { insights } = buildEnrichedBriefInsights({
+    selections: {
+      items: [
+        {
+          eventId: 'clinic_evt',
+          decision: 'needs_enrichment',
+          enrichmentType: 'household_prep',
+          why: 'matched_event_hint_rule:clinic',
+        },
+      ],
+    },
+    sourceEvents,
+    activeTrip: null,
+    recentTrip: null,
+    commuteContext: null,
+    householdEventContext: null,
+    config: {
+      services: {
+        context: {
+          eventHintRules: [
+            {
+              id: 'clinic_rule',
+              keywords: ['clinic'],
+              category: 'medical',
+              locationLabel: 'Israelitisches Krankenhaus',
+              locationAddress: 'Orchideenstieg 14, Hamburg',
+              weatherRule: 'warn_rain',
+              alternativeTransportOptions: [
+                {
+                  id: 'moia_1',
+                  label: 'MOIA',
+                  showPolicy: 'always',
+                  reminderText: 'Denk daran, das MOIA vorzubestellen!',
+                },
+              ],
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  assert.equal(insights.length, 1);
+  assert.ok(insights[0].addedFacts.some((fact) => /last 24 hours before the event/i.test(fact)));
+  assert.equal(insights[0].addedFacts.some((fact) => /Primary action:/i.test(fact)), false);
+  assert.equal(insights[0].addedFacts.some((fact) => /Weather action:/i.test(fact)), false);
+});
+
+test('derivePrimaryActionFromInsights prefers explicit reminder actions', () => {
+  const action = derivePrimaryActionFromInsights([
+    {
+      addedFacts: [
+        'Weather action: Take an umbrella just in case.',
+        'Primary action: Denk daran, das MOIA vorzubestellen!',
+      ],
+    },
+  ]);
+
+  assert.equal(action, 'Denk daran, das MOIA vorzubestellen!');
 });
 
 test('buildDailyBrief does not fall back to a plain prep-event reminder without added context', () => {
