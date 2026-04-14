@@ -7167,6 +7167,37 @@ const buildCalendarCacheFingerprint = (calendarCache = {}) => crypto
   }))
   .digest('hex');
 
+const writeContextBuildFailureDebug = async ({ error, calendarCache, config, existingContext }) => {
+  await writeDailyBriefDebug({
+    updatedAt: new Date().toISOString(),
+    status: 'error',
+    stageSource: 'context_failed',
+    error: error?.message || 'Context rebuild failed.',
+    config: {
+      displayLocale: config.system?.displayLocale || 'en',
+      contextRefreshMinutes: resolveContextRefreshMinutes(config.services.context),
+      llmEnabled: Boolean(config.services.llm?.enabled),
+      llmProvider: config.services.llm?.provider || 'openai',
+      llmModel: config.services.llm?.model || 'gpt-5-mini',
+      llmPrivacyMode: config.services.llm?.privacyMode || 'cloud-redacted',
+    },
+    stages: {
+      calendarInput: {
+        syncedAt: calendarCache?.syncedAt || null,
+        selectedCalendarIds: calendarCache?.selectedCalendarIds || [],
+        totalEvents: Array.isArray(calendarCache?.events) ? calendarCache.events.length : 0,
+        sources: calendarCache?.sources || [],
+      },
+      finalContext: {
+        brief: existingContext?.brief || { headline: 'Daily brief', bullets: [] },
+        activeTrip: existingContext?.activeTrip || null,
+      },
+    },
+  }).catch((writeError) => {
+    console.error('Failed to write context failure debug:', writeError.message);
+  });
+};
+
 const ensureFreshContextCache = async () => {
   const [context, calendarCache, config] = await Promise.all([
     loadContextCache(),
@@ -7186,9 +7217,15 @@ const ensureFreshContextCache = async () => {
   }
 
   const [secrets, household] = await Promise.all([readSecrets(), readHousehold()]);
-  const rebuiltContext = await buildContext(calendarCache, config, secrets, household, context, true);
-  await fs.writeJson(CONTEXT_CACHE_PATH, rebuiltContext, { spaces: 2 });
-  return { context: rebuiltContext, config };
+  try {
+    const rebuiltContext = await buildContext(calendarCache, config, secrets, household, context, true);
+    await fs.writeJson(CONTEXT_CACHE_PATH, rebuiltContext, { spaces: 2 });
+    return { context: rebuiltContext, config };
+  } catch (error) {
+    console.error('Context rebuild failed:', error.message);
+    await writeContextBuildFailureDebug({ error, calendarCache, config, existingContext: context });
+    return { context, config };
+  }
 };
 
 const syncCalendarData = async ({ forceContext = false } = {}) => {
@@ -7247,8 +7284,13 @@ const syncCalendarData = async ({ forceContext = false } = {}) => {
     || (Date.now() - new Date(existingContext.updatedAt).getTime()) >= (refreshMinutes * 60000);
 
   if (shouldRefreshContext) {
-    const context = await buildContext(calendarCache, config, secrets, household, existingContext, forceContext || calendarChanged);
-    await fs.writeJson(CONTEXT_CACHE_PATH, context, { spaces: 2 });
+    try {
+      const context = await buildContext(calendarCache, config, secrets, household, existingContext, forceContext || calendarChanged);
+      await fs.writeJson(CONTEXT_CACHE_PATH, context, { spaces: 2 });
+    } catch (error) {
+      console.error('Context rebuild failed:', error.message);
+      await writeContextBuildFailureDebug({ error, calendarCache, config, existingContext });
+    }
   }
 
   return calendarCache;
