@@ -758,6 +758,12 @@ const inferGoogleEmailFromCalendars = (calendars = []) => {
 
 const formatGoogleAuthError = (error) => {
   const responseData = error?.response?.data;
+  if (error?.code === 'GOOGLE_RECONNECT_REQUIRED') {
+    return error.message;
+  }
+  if (responseData?.error === 'invalid_grant') {
+    return 'Google Calendar authorization expired or was revoked. Reconnect Google Calendar.';
+  }
   if (typeof responseData?.error_description === 'string' && responseData.error_description.trim()) {
     return responseData.error_description.trim();
   }
@@ -771,6 +777,63 @@ const formatGoogleAuthError = (error) => {
     return error.message.trim();
   }
   return 'Google authentication failed.';
+};
+
+const getGoogleRefreshTokenExpiresAt = (account = null) => {
+  const seconds = Number(account?.tokens?.refresh_token_expires_in);
+  const connectedAt = new Date(account?.connectedAt || 0).getTime();
+  if (!Number.isFinite(seconds) || seconds <= 0 || !Number.isFinite(connectedAt) || connectedAt <= 0) {
+    return null;
+  }
+
+  return new Date(connectedAt + (seconds * 1000)).toISOString();
+};
+
+const getGoogleAccessTokenExpiresAt = (account = null) => {
+  const expiryDate = Number(account?.tokens?.expiry_date);
+  if (!Number.isFinite(expiryDate) || expiryDate <= 0) {
+    return null;
+  }
+
+  return new Date(expiryDate).toISOString();
+};
+
+const buildGoogleTokenStatus = (account = null, now = Date.now()) => {
+  const tokens = account?.tokens || {};
+  const refreshTokenExpiresAt = getGoogleRefreshTokenExpiresAt(account);
+  const accessTokenExpiresAt = getGoogleAccessTokenExpiresAt(account);
+  const refreshTokenExpired = Boolean(refreshTokenExpiresAt && new Date(refreshTokenExpiresAt).getTime() <= now);
+  const accessTokenExpired = Boolean(accessTokenExpiresAt && new Date(accessTokenExpiresAt).getTime() <= now);
+  const hasRefreshToken = Boolean(tokens.refresh_token);
+  const hasAccessToken = Boolean(tokens.access_token);
+  const hasUsableAccessToken = hasAccessToken && !accessTokenExpired;
+  const needsReconnect = refreshTokenExpired || (!hasRefreshToken && !hasUsableAccessToken);
+
+  return {
+    hasRefreshToken,
+    hasAccessToken,
+    accessTokenExpiresAt,
+    refreshTokenExpiresAt,
+    refreshTokenExpired,
+    needsReconnect,
+    statusReason: needsReconnect
+      ? (refreshTokenExpired ? 'refresh_token_expired' : 'missing_refresh_token')
+      : 'ready',
+  };
+};
+
+const assertGoogleTokenUsable = (account) => {
+  const tokenStatus = buildGoogleTokenStatus(account);
+  if (!tokenStatus.needsReconnect) {
+    return tokenStatus;
+  }
+
+  const error = new Error(tokenStatus.statusReason === 'refresh_token_expired'
+    ? 'Google Calendar authorization expired. Reconnect Google Calendar.'
+    : 'Google Calendar authorization is incomplete. Reconnect Google Calendar.');
+  error.code = 'GOOGLE_RECONNECT_REQUIRED';
+  error.tokenStatus = tokenStatus;
+  throw error;
 };
 
 const readConfig = async () => {
@@ -992,6 +1055,31 @@ const sanitizeCalendarSourcesForClient = (sources, secrets) => ({
     passwordConfigured: Boolean(secrets?.calendarSources?.[source.id]?.password),
   })),
 });
+
+const attachCalendarSourceStatuses = (safeSources, calendarCache) => {
+  const sourceStatusById = new Map((calendarCache?.sources || []).map((source) => [source.id, source]));
+  return {
+    ...safeSources,
+    sources: (safeSources.sources || []).map((source) => {
+      const status = sourceStatusById.get(source.id);
+      return {
+        ...source,
+        syncStatus: status?.status || null,
+        syncError: status?.error || '',
+        syncEventCount: status?.eventCount ?? null,
+      };
+    }),
+  };
+};
+
+const readCalendarSourcesForClient = async () => {
+  const [sources, secrets, calendarCache] = await Promise.all([
+    readCalendarSources(),
+    readSecrets(),
+    loadCalendarCache(),
+  ]);
+  return attachCalendarSourceStatuses(sanitizeCalendarSourcesForClient(sources, secrets), calendarCache);
+};
 
 const saveCalendarSources = async (rawSources) => {
   const currentSecrets = await readSecrets();
@@ -1278,8 +1366,26 @@ const withGoogleClient = async () => {
     return null;
   }
 
+  assertGoogleTokenUsable(account);
+
   const client = createGoogleClient(settings);
   client.setCredentials(account.tokens || {});
+  client.on('tokens', (tokens) => {
+    const mergedTokens = {
+      ...(account.tokens || {}),
+      ...(tokens || {}),
+    };
+    if (!tokens.refresh_token && account.tokens?.refresh_token) {
+      mergedTokens.refresh_token = account.tokens.refresh_token;
+    }
+    void writeGoogleAccount({
+      ...account,
+      tokenUpdatedAt: new Date().toISOString(),
+      tokens: mergedTokens,
+    }).catch((error) => {
+      console.error('Failed to persist refreshed Google token:', error.message);
+    });
+  });
   return { client, account };
 };
 
@@ -1684,6 +1790,16 @@ const fetchCalendarSourceBundle = async ({ source, secrets, timeMin, timeMax }) 
     };
   }
 };
+
+const buildGoogleCalendarErrorSource = (error) => ({
+  id: 'google',
+  type: 'google',
+  name: 'Google Calendar',
+  status: 'error',
+  error: formatGoogleAuthError(error),
+  reconnectRequired: error?.code === 'GOOGLE_RECONNECT_REQUIRED'
+    || error?.response?.data?.error === 'invalid_grant',
+});
 
 const fetchGoogleCalendarBundle = async ({ forceContext = false } = {}) => {
   const [clientInfo, config] = await Promise.all([withGoogleClient(), readConfig()]);
@@ -7083,7 +7199,15 @@ const syncCalendarData = async ({ forceContext = false } = {}) => {
     readCalendarSources(),
   ]);
   const previousCalendarCache = await readJsonIfExists(CALENDAR_CACHE_PATH, DEFAULT_CALENDAR_CACHE);
-  const googleBundle = await fetchGoogleCalendarBundle({ forceContext });
+  let googleBundle = null;
+  let googleSource = null;
+  try {
+    googleBundle = await fetchGoogleCalendarBundle({ forceContext });
+    googleSource = googleBundle?.source || null;
+  } catch (error) {
+    googleSource = buildGoogleCalendarErrorSource(error);
+    console.error('Google calendar sync failed:', formatGoogleAuthError(error));
+  }
   const now = new Date();
   const timeMin = googleBundle?.timeMin || new Date(now.getTime() - 86400000).toISOString();
   const timeMax = googleBundle?.timeMax || new Date(now.getTime() + ((Number(config.services.context.tripLookaheadDays) || 14) * 86400000)).toISOString();
@@ -7096,7 +7220,7 @@ const syncCalendarData = async ({ forceContext = false } = {}) => {
 
   const calendarCache = {
     syncedAt: new Date().toISOString(),
-    connectedEmail: googleBundle?.connectedEmail || '',
+    connectedEmail: googleBundle?.connectedEmail || previousCalendarCache.connectedEmail || '',
     calendars: [
       ...(googleBundle?.calendars || []),
       ...externalBundles.flatMap((bundle) => bundle.calendars || []),
@@ -7107,7 +7231,7 @@ const syncCalendarData = async ({ forceContext = false } = {}) => {
       ...externalBundles.flatMap((bundle) => bundle.events || []),
     ].sort((left, right) => new Date(left.start) - new Date(right.start)),
     sources: [
-      ...(googleBundle?.source ? [googleBundle.source] : []),
+      ...(googleSource ? [googleSource] : []),
       ...externalBundles.map((bundle) => bundle.source),
     ],
   };
@@ -7436,14 +7560,18 @@ app.get('/api/auth/google/status', async (req, res) => {
       getStoredGoogleAccount(),
       loadCalendarCache(),
     ]);
+    const tokenStatus = buildGoogleTokenStatus(account);
 
     res.json({
-      connected: Boolean(account?.tokens?.refresh_token || account?.tokens?.access_token),
+      connected: Boolean(account?.tokens && !tokenStatus.needsReconnect),
       email: account?.email || '',
       clientConfigured: Boolean(config.services.google.clientId && secrets.google?.clientSecret),
       redirectUri: config.services.google.redirectUri || `${req.protocol}://${req.get('host')}/api/auth/google/callback`,
       selectedCalendarIds: calendarCache.selectedCalendarIds || config.services.google.selectedCalendarIds,
       lastSyncedAt: calendarCache.syncedAt,
+      tokenStatus,
+      needsReconnect: tokenStatus.needsReconnect,
+      statusReason: tokenStatus.statusReason,
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to read Google auth status', details: error.message });
@@ -7466,8 +7594,16 @@ app.get('/api/google/calendars', async (req, res) => {
     if (!cache) {
       return res.status(404).json({ error: 'Google account is not connected.' });
     }
+    const googleSource = (cache.sources || []).find((source) => source?.id === 'google');
+    if (googleSource?.status === 'error') {
+      return res.status(401).json({
+        error: 'Google Calendar sync failed',
+        details: googleSource.error,
+        reconnectRequired: googleSource.reconnectRequired === true,
+      });
+    }
     return res.json({
-      calendars: cache.calendars,
+      calendars: (cache.calendars || []).filter((calendar) => !calendar.sourceId),
       selectedCalendarIds: cache.selectedCalendarIds,
       lastSyncedAt: cache.syncedAt,
     });
@@ -7492,8 +7628,7 @@ app.get('/api/calendars', async (req, res) => {
 
 app.get('/api/calendar-sources', async (req, res) => {
   try {
-    const [sources, secrets] = await Promise.all([readCalendarSources(), readSecrets()]);
-    res.json(sanitizeCalendarSourcesForClient(sources, secrets));
+    res.json(await readCalendarSourcesForClient());
   } catch (error) {
     res.status(500).json({ error: 'Failed to read calendar sources', details: error.message });
   }
@@ -7505,7 +7640,7 @@ app.post('/api/calendar-sources', async (req, res) => {
     const cache = await syncCalendarData({ forceContext: true });
     res.json({
       success: true,
-      ...saved,
+      ...attachCalendarSourceStatuses(saved, cache),
       calendars: cache?.calendars || [],
       lastSyncedAt: cache?.syncedAt || null,
     });
@@ -7695,7 +7830,9 @@ module.exports = {
   buildContextCandidates,
   buildDailyBrief,
   buildEnrichedBriefInsights,
+  buildGoogleCalendarErrorSource,
   buildHeuristicLlmSelection,
+  buildGoogleTokenStatus,
   derivePrimaryActionFromInsights,
   estimateRouteFallback,
   filterEventsForDailyBrief,

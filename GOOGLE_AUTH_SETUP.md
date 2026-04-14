@@ -22,6 +22,8 @@ You will receive:
 - `Client ID`
 - `Client secret`
 
+If the OAuth consent screen is `External` and still in `Testing`, Google issues a refresh token that expires after about 7 days for Calendar scopes. Move the consent screen to production for a long-running self-hosted mirror, or expect to reconnect Google periodically.
+
 ## 2. Development setup
 
 Use this when running Mirrorial on your Mac.
@@ -129,6 +131,16 @@ Planned follow-up work for future public-ready updates includes:
 - sensitive-scope review if Google requires it for your release mode
 
 ## 7. Troubleshooting
+
+### Calendar stops syncing after a few days
+
+Check the Google OAuth consent screen publishing status. If it is `External` and `Testing`, the stored refresh token expires after about 7 days. The Remote UI will report that Google Calendar needs reconnection when Mirrorial can detect the expiry metadata.
+
+To confirm on the mirror, inspect the non-secret metadata in:
+
+- `~/.config/mirrorial/accounts/google-account.json`
+
+If `tokens.refresh_token_expires_in` is present and close to `604800`, the Google authorization was time-limited. Reconnect Google after moving the OAuth consent screen to production.
 
 ### `redirect_uri_mismatch`
 

@@ -7,7 +7,9 @@ const {
   buildContextCandidates,
   buildDailyBrief,
   buildEnrichedBriefInsights,
+  buildGoogleCalendarErrorSource,
   buildHeuristicLlmSelection,
+  buildGoogleTokenStatus,
   derivePrimaryActionFromInsights,
   estimateRouteFallback,
   filterEventsForDailyBrief,
@@ -149,6 +151,55 @@ test('buildCalendarCacheFingerprint changes when calendar events change', () => 
   };
 
   assert.notEqual(buildCalendarCacheFingerprint(baseCache), buildCalendarCacheFingerprint(changedCache));
+});
+
+test('buildGoogleTokenStatus marks time-limited refresh tokens as reconnect required after expiry', () => {
+  const connectedAt = '2026-03-30T21:31:44.409Z';
+  const status = buildGoogleTokenStatus({
+    connectedAt,
+    tokens: {
+      refresh_token: 'redacted',
+      access_token: 'redacted',
+      refresh_token_expires_in: 604799,
+      expiry_date: Date.parse('2026-03-30T22:31:42.713Z'),
+    },
+  }, Date.parse('2026-04-14T00:00:00.000Z'));
+
+  assert.equal(status.refreshTokenExpiresAt, '2026-04-06T21:31:43.409Z');
+  assert.equal(status.refreshTokenExpired, true);
+  assert.equal(status.needsReconnect, true);
+  assert.equal(status.statusReason, 'refresh_token_expired');
+});
+
+test('buildGoogleTokenStatus keeps production refresh tokens connected when no expiry metadata exists', () => {
+  const status = buildGoogleTokenStatus({
+    connectedAt: '2026-03-30T21:31:44.409Z',
+    tokens: {
+      refresh_token: 'redacted',
+      access_token: 'redacted',
+      expiry_date: Date.parse('2026-03-30T22:31:42.713Z'),
+    },
+  }, Date.parse('2026-04-14T00:00:00.000Z'));
+
+  assert.equal(status.refreshTokenExpiresAt, null);
+  assert.equal(status.refreshTokenExpired, false);
+  assert.equal(status.needsReconnect, false);
+  assert.equal(status.statusReason, 'ready');
+});
+
+test('buildGoogleCalendarErrorSource marks invalid grants as reconnect required', () => {
+  const source = buildGoogleCalendarErrorSource({
+    response: {
+      data: {
+        error: 'invalid_grant',
+      },
+    },
+  });
+
+  assert.equal(source.id, 'google');
+  assert.equal(source.status, 'error');
+  assert.equal(source.reconnectRequired, true);
+  assert.match(source.error, /Reconnect Google Calendar/);
 });
 
 test('normalizeConfig preserves module settings after a layout module is removed', () => {

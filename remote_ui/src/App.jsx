@@ -1078,7 +1078,7 @@ function App() {
       const statusResponse = await axios.get(`${API_BASE}/auth/google/status`);
       setGoogleStatus(statusResponse.data);
 
-      if (statusResponse.data.connected) {
+      if (statusResponse.data.connected && !statusResponse.data.needsReconnect) {
         const calendarsResponse = await axios.get(`${API_BASE}/google/calendars`);
         setGoogleCalendars(calendarsResponse.data.calendars || []);
         applySelectedCalendarIds(calendarsResponse.data.selectedCalendarIds || []);
@@ -1089,6 +1089,14 @@ function App() {
       refreshCalendarState();
     } catch (error) {
       setGoogleCalendars([]);
+      if (error.response?.data?.reconnectRequired) {
+        setGoogleStatus((current) => ({
+          ...(current || {}),
+          connected: false,
+          needsReconnect: true,
+          statusReason: 'sync_failed',
+        }));
+      }
     }
   };
 
@@ -3512,7 +3520,16 @@ function App() {
 
                         <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 text-sm text-slate-300 space-y-2">
                           <div className="font-semibold text-white">Connection status</div>
-                          <div>{googleStatus?.connected ? `Connected as ${googleStatus.email || 'Google account'}` : 'No Google account connected yet.'}</div>
+                          <div>
+                            {googleStatus?.needsReconnect
+                              ? 'Connection expired. Reconnect Google Calendar.'
+                              : (googleStatus?.connected ? `Connected as ${googleStatus.email || 'Google account'}` : 'No Google account connected yet.')}
+                          </div>
+                          {googleStatus?.tokenStatus?.refreshTokenExpiresAt && (
+                            <div className={googleStatus.needsReconnect ? 'text-xs text-amber-300' : 'text-xs text-slate-500'}>
+                              Google authorization expires {new Date(googleStatus.tokenStatus.refreshTokenExpiresAt).toLocaleString()}.
+                            </div>
+                          )}
                           <div className="text-xs text-slate-500">Save the OAuth settings before starting the popup flow.</div>
                         </div>
 
@@ -3533,7 +3550,11 @@ function App() {
                         <h2 className="text-lg font-semibold text-white">Calendar Sync</h2>
                       </div>
 
-                      {googleCalendars.length === 0 ? (
+                      {googleStatus?.needsReconnect ? (
+                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+                          Google Calendar needs a fresh consent flow before calendars can sync again.
+                        </div>
+                      ) : googleCalendars.length === 0 ? (
                         <div className="text-sm text-slate-400">Connect Google first to fetch calendars.</div>
                       ) : (
                         <div className="space-y-3">
@@ -3606,13 +3627,20 @@ function App() {
 
                         {calendarSources.map((source, index) => (
                           <div key={source.id} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 space-y-4">
-                            <div className="flex items-center justify-between gap-4">
-                              <div>
-                                <div className="text-white font-semibold">{source.type === 'caldav' ? 'CalDAV account' : 'ICS feed'} #{index + 1}</div>
-                                <div className="text-xs text-slate-500">Credentials are stored securely on the mirror.</div>
-                              </div>
-                              <button onClick={() => removeCalendarSource(source.id)} className="text-slate-500 hover:text-red-400 transition-colors">
-                                <Trash2 size={18} />
+	                            <div className="flex items-center justify-between gap-4">
+	                              <div>
+	                                <div className="text-white font-semibold">{source.type === 'caldav' ? 'CalDAV account' : 'ICS feed'} #{index + 1}</div>
+	                                <div className="text-xs text-slate-500">Credentials are stored securely on the mirror.</div>
+                                  {source.syncStatus && (
+                                    <div className={source.syncStatus === 'error' ? 'mt-2 text-xs text-amber-300' : 'mt-2 text-xs text-emerald-300'}>
+                                      {source.syncStatus === 'error'
+                                        ? `Last sync failed: ${source.syncError || 'unknown error'}`
+                                        : `Last sync ready${source.syncEventCount !== null && source.syncEventCount !== undefined ? `, ${source.syncEventCount} events` : ''}.`}
+                                    </div>
+                                  )}
+	                              </div>
+	                              <button onClick={() => removeCalendarSource(source.id)} className="text-slate-500 hover:text-red-400 transition-colors">
+	                                <Trash2 size={18} />
                               </button>
                             </div>
 
