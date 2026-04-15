@@ -28,7 +28,7 @@ Options:
   --skip-engine        Skip flutter-pi installation and reuse the current engine setup.
   --skip-health-check  Skip the final service verification step.
   --profile PROFILE    Force a detected install profile. Available: rpi-bookworm, rpi-trixie, generic-debian-drm.
-  --display-bundle     Install a prebuilt display bundle archive (.tar.gz) from a local path or HTTP(S) URL instead of building on-device.
+  --display-bundle     Install a prebuilt display bundle archive (.tar.gz, .tgz, or GitHub artifact .zip) from a local path or HTTP(S) URL instead of building on-device.
   --help               Show this message.
 EOF
 }

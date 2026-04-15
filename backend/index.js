@@ -1708,12 +1708,13 @@ const buildRecurringIcsStartDates = ({ startDate, rule, isAllDay, timeMin, timeM
       ?.map((day) => ICS_WEEKDAY_TO_INDEX[day])
       .filter((day) => day !== undefined) || [startDate.getDay()];
     const firstWeek = getWeekStart(startDate, weekStartsOn);
-    let candidateWeek = getWeekStart(addLocalDays(windowStart, -7), weekStartsOn);
+    let candidateWeek = firstWeek;
     let sequenceIndex = 0;
-    while (candidateWeek <= hardEnd && starts.length < 500) {
+    let inspectedWeeks = 0;
+    while (candidateWeek <= hardEnd && sequenceIndex < count && starts.length < 500 && inspectedWeeks < 3000) {
       const weekOffset = Math.round((candidateWeek - firstWeek) / (7 * 86400000));
       if (weekOffset >= 0 && weekOffset % interval === 0) {
-        byDays.forEach((day) => {
+        for (const day of byDays) {
           const dayOffset = (day - weekStartsOn + 7) % 7;
           const candidateDay = addLocalDays(candidateWeek, dayOffset);
           const candidate = new Date(
@@ -1728,10 +1729,14 @@ const buildRecurringIcsStartDates = ({ startDate, rule, isAllDay, timeMin, timeM
           if (candidate >= startDate) {
             pushIfInWindow(candidate, sequenceIndex);
             sequenceIndex += 1;
+            if (sequenceIndex >= count) {
+              break;
+            }
           }
-        });
+        }
       }
       candidateWeek = addLocalDays(candidateWeek, 7);
+      inspectedWeeks += 1;
     }
     return starts.sort((left, right) => left - right);
   }
@@ -1807,6 +1812,25 @@ const getIcsExdateKeys = (props, isAllDay) => new Set((props.EXDATE || [])
   .map((value) => getIcsRecurrenceKey(value, isAllDay))
   .filter(Boolean));
 
+const isStaleIndefiniteIcsRecurrence = ({ props, rule, startDate, timeMin }) => {
+  if (!rule?.freq || rule.count || rule.until || !startDate) {
+    return false;
+  }
+
+  const combinedText = [
+    props.SUMMARY?.[0]?.value || '',
+    props.DESCRIPTION?.[0]?.value || '',
+    props.LOCATION?.[0]?.value || '',
+  ].join(' ');
+  if (RECURRING_ALWAYS_KEEP_PATTERNS.some((pattern) => pattern.test(combinedText))) {
+    return false;
+  }
+
+  const windowStart = timeMin ? new Date(timeMin).getTime() : Date.now();
+  const staleCutoffMs = windowStart - (730 * 86400000);
+  return startDate.getTime() < staleCutoffMs;
+};
+
 const parseIcsEvents = ({ sourceId, calendarId, calendarSummary, calendarColor = '', text, defaultUrl = '', timeMin = null, timeMax = null }) => {
   const unfolded = unfoldIcsLines(text);
   const blocks = unfolded.match(/BEGIN:VEVENT[\s\S]*?END:VEVENT/g) || [];
@@ -1845,6 +1869,9 @@ const parseIcsEvents = ({ sourceId, calendarId, calendarSummary, calendarColor =
     const rrule = props.RRULE?.[0]?.value ? parseIcsRrule(props.RRULE[0].value) : null;
     if (rrule?.freq) {
       const startDate = getIcsPropDate(startMeta, isAllDay);
+      if (isStaleIndefiniteIcsRecurrence({ props, rule: rrule, startDate, timeMin })) {
+        return;
+      }
       const overrideKeys = overridesByUid.get(uid) || new Map();
       const exdateKeys = getIcsExdateKeys(props, isAllDay);
       buildRecurringIcsStartDates({ startDate, rule: rrule, isAllDay, timeMin, timeMax }).forEach((occurrenceStart, occurrenceIndex) => {
@@ -2222,6 +2249,25 @@ const buildForecastNarrative = ({ dominantCode, minTemp, maxTemp, rainyDays, sel
   }
 
   return `Around ${midpoint}C and ${dominantLabel}.`;
+};
+
+const buildTripWeatherFact = (destination, forecast) => {
+  if (!forecast) {
+    return '';
+  }
+  const destinationLabel = destination || 'Destination';
+  const label = forecast.label || forecast.narrative || '';
+  const bucket = forecast.weatherCode !== undefined && forecast.weatherCode !== null
+    ? weatherCodeToBucket(forecast.weatherCode)
+    : '';
+  const needsUmbrella = forecast.rainyDays > 0 || ['rain', 'showers', 'stormy'].includes(bucket);
+  const prefix = label ? `${destinationLabel} weather: ${label}.` : '';
+
+  if (needsUmbrella) {
+    return `${prefix} Pack an umbrella or rain layer.`.trim();
+  }
+
+  return prefix || (forecast.narrative ? `${destinationLabel}: ${forecast.narrative}` : '');
 };
 
 const summarizeForecast = (forecast, startDate, endDate) => {
@@ -2626,11 +2672,18 @@ const inferTripAnchorFromEvent = (event, config = null, household = null) => {
   const title = event.title.toLowerCase();
   const durationMs = Math.max(end.getTime() - start.getTime(), 0);
   const durationDays = Math.max(1, Math.round(durationMs / 86400000));
+  const hasTravelSignal = eventHasTravelSignal(event);
+  if (CONCERT_SIGNAL_PATTERN.test(eventText) && !hasTravelSignal) {
+    return null;
+  }
+  if (!hasTravelSignal && !(event.isAllDay && durationDays > 1)) {
+    return null;
+  }
   let confidence = 0.25;
 
   if (event.location) confidence += 0.25;
   if (event.isAllDay && durationDays > 1) confidence += 0.2;
-  if (TRAVEL_SIGNAL_PATTERN.test(title)) confidence += 0.25;
+  if (hasTravelSignal) confidence += 0.25;
   if (event.calendarSummary?.toLowerCase().includes('work')) confidence += 0.05;
 
   if (confidence < 0.45) {
@@ -5086,7 +5139,7 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, trave
     const phaseCode = activeTrip.phase?.code || '';
     const phaseLabel = activeTrip.phase?.label || '';
     const tripHours = hoursUntil(activeTrip.start);
-    const forecastNarrative = activeTrip.enrichment?.forecast?.narrative || activeTrip.enrichment?.forecast?.label || '';
+    const tripWeatherFact = buildTripWeatherFact(destination, activeTrip.enrichment?.forecast);
     const currentWeatherLabel = buildTripCurrentConditionsLabel(activeTrip);
     const homeboundSegment = activeTrip.homeboundSegment || null;
     const homeboundHours = homeboundSegment?.start ? hoursUntil(homeboundSegment.start) : null;
@@ -5173,8 +5226,8 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, trave
       bullets.push(activeTrip.transportSummary);
     }
     const showDestinationLiveConditions = phaseCode === 'trip_active' || phaseCode === 'returning_home';
-    if (forecastNarrative) {
-      bullets.push(forecastNarrative);
+    if (tripWeatherFact) {
+      bullets.push(tripWeatherFact);
     }
     if (showDestinationLiveConditions && currentWeatherLabel) {
       bullets.push(currentWeatherLabel);
@@ -6060,7 +6113,7 @@ const buildInsightFactsFromContext = (event, activeTrip, recentTrip, commuteCont
       addedFacts: uniqueTexts([
         relatedTrip.transportLifecycle?.label || '',
         relatedTrip.transportSummary || '',
-        relatedTrip.enrichment?.forecast?.label ? `${destination} weather: ${relatedTrip.enrichment.forecast.label}.` : '',
+        buildTripWeatherFact(destination, relatedTrip.enrichment?.forecast),
       ]),
     };
   }

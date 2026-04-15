@@ -202,6 +202,75 @@ test('parseIcsEvents applies EXDATE and recurrence overrides', () => {
   ]);
 });
 
+test('parseIcsEvents does not resurrect old COUNT-based weekly series', () => {
+  const events = parseIcsEvents({
+    sourceId: 'ics_family',
+    calendarId: 'ics_family:https://example.com/family.ics',
+    calendarSummary: 'Family',
+    text: [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'UID:old-cleaner@example.com',
+      'DTSTART:20230106T130000',
+      'DTEND:20230106T150000',
+      'RRULE:FREQ=WEEKLY;BYDAY=FR;COUNT=10',
+      'SUMMARY:Frau Egbadon',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\n'),
+    timeMin: '2026-04-14T00:00:00.000Z',
+    timeMax: '2026-04-22T23:59:59.000Z',
+  });
+
+  assert.equal(events.length, 0);
+});
+
+test('parseIcsEvents skips stale indefinite recurring non-reminder series', () => {
+  const events = parseIcsEvents({
+    sourceId: 'ics_family',
+    calendarId: 'ics_family:https://example.com/family.ics',
+    calendarSummary: 'Family',
+    text: [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'UID:old-physio@example.com',
+      'DTSTART:20220107T130000',
+      'DTEND:20220107T140000',
+      'RRULE:FREQ=WEEKLY;BYDAY=FR',
+      'SUMMARY:Physiotherapie',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\n'),
+    timeMin: '2026-04-14T00:00:00.000Z',
+    timeMax: '2026-04-22T23:59:59.000Z',
+  });
+
+  assert.equal(events.length, 0);
+});
+
+test('parseIcsEvents keeps recent indefinite recurring events', () => {
+  const events = parseIcsEvents({
+    sourceId: 'ics_work',
+    calendarId: 'ics_work:https://example.com/work.ics',
+    calendarSummary: 'Work',
+    text: [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'UID:current-teaching@example.com',
+      'DTSTART:20260403T130000',
+      'DTEND:20260403T143000',
+      'RRULE:FREQ=WEEKLY;BYDAY=FR',
+      'SUMMARY:Teaching',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\n'),
+    timeMin: '2026-04-14T00:00:00.000Z',
+    timeMax: '2026-04-22T23:59:59.000Z',
+  });
+
+  assert.deepEqual(events.map((event) => event.start), ['2026-04-17T13:00:00']);
+});
+
 test('buildCalendarCacheFingerprint changes when calendar events change', () => {
   const baseCache = {
     selectedCalendarIds: ['work'],
@@ -556,7 +625,7 @@ test('inferTripAnchorFromEvent suppresses home-address-like destinations unless 
   const usefulAddressEvent = {
     ...plainAddressEvent,
     id: 'evt_useful_address',
-    title: 'Hospital appointment',
+    title: 'Hospital trip appointment',
     location: 'City Hospital, Klinikstrasse 52, Musterstadt',
   };
 
@@ -570,7 +639,7 @@ test('inferTripAnchorFromEvent suppresses home-address-like destinations unless 
 test('inferTripAnchorFromEvent allows address-like destinations when they match the configured whitelist', () => {
   const event = {
     id: 'evt_whitelist',
-    title: 'Messehallen setup',
+    title: 'Trip to Messehallen setup',
     description: 'Annual hall access',
     location: 'Beispielallee 8, Musterstadt',
     start: isoFromNow(24),
@@ -641,6 +710,21 @@ test('inferTripAnchorFromEvent suppresses trips to the configured home city', ()
   );
 
   assert.equal(anchor, null);
+});
+
+test('inferTripAnchorFromEvent does not treat concert events as trips', () => {
+  const event = {
+    id: 'evt_concertina',
+    title: 'Concert in Concertina',
+    description: '',
+    location: 'Concertina Hall',
+    start: isoFromNow(24),
+    end: isoFromNow(27),
+    isAllDay: false,
+    calendarSummary: 'Work',
+  };
+
+  assert.equal(inferTripAnchorFromEvent(event, { services: { context: {} } }, null), null);
 });
 
 test('buildContextCandidates ranks active travel above lower-priority household items', () => {
@@ -1258,7 +1342,7 @@ test('buildContextCandidates does not show destination live conditions before de
   const candidates = buildContextCandidates([], activeTrip, null, null, null, null, null, null, null);
 
   assert.equal(candidates[0].id, 'active_trip');
-  assert.ok(candidates[0].bullets.some((bullet) => /Mixed weather/.test(bullet)));
+  assert.ok(candidates[0].bullets.some((bullet) => /Athens, Greece weather: 7-18C, partly cloudy/.test(bullet)));
   assert.ok(candidates[0].bullets.every((bullet) => !/Athens, Greece now|Local time/.test(bullet)));
 });
 

@@ -159,11 +159,11 @@ install_prebuilt_display_bundle() {
     run_user_shell "
       set -euo pipefail
       mkdir -p \"$ACTUAL_HOME/.mirrorial_tmp\"
-      archive=\$(mktemp \"$ACTUAL_HOME/.mirrorial_tmp/prebuilt-bundle.XXXXXX.tar.gz\")
+      archive=\$(mktemp \"$ACTUAL_HOME/.mirrorial_tmp/prebuilt-bundle.XXXXXX\")
       curl -L --fail \"$source\" -o \"\$archive\"
       rm -rf \"$bundle_dir\"
       mkdir -p \"$destination\"
-      tar -xzf \"\$archive\" -C \"$destination\"
+      bash \"$PROJECT_ROOT/scripts/install_display_bundle_archive.sh\" \"\$archive\" \"$destination\" \"$source\"
       rm -f \"\$archive\"
     "
   else
@@ -171,7 +171,7 @@ install_prebuilt_display_bundle() {
       set -euo pipefail
       rm -rf \"$bundle_dir\"
       mkdir -p \"$destination\"
-      tar -xzf \"$source\" -C \"$destination\"
+      bash \"$PROJECT_ROOT/scripts/install_display_bundle_archive.sh\" \"$source\" \"$destination\" \"$source\"
     "
   fi
 

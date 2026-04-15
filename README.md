@@ -167,6 +167,12 @@ On low-memory boards such as the Raspberry Pi Zero 2 W, a prebuilt display bundl
 ./scripts/install_linux.sh --no-reboot --display-bundle /path/to/mirrorial-display-bundle-arm64-flutterpi.tar.gz
 ```
 
+GitHub Actions artifact downloads can also be passed directly as `.zip` files:
+
+```bash
+./scripts/install_linux.sh --no-reboot --display-bundle /path/to/mirrorial-display-bundle-arm64-flutterpi.zip
+```
+
 Compatibility wrappers remain available:
 
 ```bash
@@ -183,7 +189,7 @@ For the display pipeline, Mirrorial uses `flutter-pi` plus the project-local `fl
 The recommended deployment workflow for slower boards is:
 
 1. Build and package `display_app/bundle` on a stronger machine.
-2. Copy or publish the resulting `.tar.gz` archive.
+2. Copy or publish the resulting `.tar.gz` archive, or the `.zip` downloaded from GitHub Actions.
 3. Pass that archive to `scripts/install_linux.sh --display-bundle ...` on the target device.
 
 Build and package the bundle on the stronger machine:
@@ -204,6 +210,8 @@ Install from a local archive on the target device:
 
 ```bash
 ./scripts/install_linux.sh --no-reboot --display-bundle /absolute/path/to/mirrorial-display-bundle-arm64-flutterpi.tar.gz
+# or the GitHub Actions artifact download:
+./scripts/install_linux.sh --no-reboot --display-bundle /absolute/path/to/mirrorial-display-bundle-arm64-flutterpi.zip
 ```
 
 Install from a remote archive URL on the target device:
@@ -233,12 +241,11 @@ Recommended usage:
 1. Open the `Actions` tab in GitHub.
 2. Run `Build Display Bundle`.
 3. Download the uploaded artifact.
-4. Check the file format. If GitHub presents the artifact as a `.zip`, convert the contained bundle back to `.tar.gz` before copying it to the target device.
-5. Copy it to the target Pi or host it somewhere reachable.
-6. Install with:
+4. Copy the downloaded `.zip` or the contained `.tar.gz` to the target Pi, or host it somewhere reachable.
+5. Install with:
 
 ```bash
-./scripts/install_linux.sh --no-reboot --display-bundle /absolute/path/to/mirrorial-display-bundle-arm64-flutterpi.tar.gz
+./scripts/install_linux.sh --no-reboot --display-bundle /absolute/path/to/mirrorial-display-bundle-arm64-flutterpi.zip
 ```
 
 For public repositories, standard GitHub-hosted runners are free to use, and `workflow_dispatch` runs can only be started by users with write access. See GitHub's billing docs for current details: [GitHub Actions billing](https://docs.github.com/en/billing/managing-billing-for-github-actions/about-billing-for-github-actions), [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
