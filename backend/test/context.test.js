@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs-extra');
+const os = require('os');
+const path = require('path');
 
 const {
   buildBirthdayContext,
@@ -20,6 +23,8 @@ const {
   buildBriefItemsFromBrief,
   llmBriefHasMeaningfulContent,
   normalizeConfig,
+  parseIcsEvents,
+  readRuntimeJsonIfExists,
   resolveContextRefreshMinutes,
   selectActiveTrip,
   selectContextBrief,
@@ -121,8 +126,8 @@ test('findMatchingSavedPlace matches calendar text against saved place names and
 
 test('filterEventsForDailyBrief can exclude synced calendars from brief generation', () => {
   const events = [
-    { id: 'work_1', calendarId: 'work', title: 'Business trip Athens' },
-    { id: 'f1_1', calendarId: 'f1', title: 'F1 Japan GP' },
+    { id: 'work_1', calendarId: 'work', title: 'Business trip Athens', start: isoFromNow(24), end: isoFromNow(26), isRecurring: false },
+    { id: 'f1_1', calendarId: 'f1', title: 'F1 Japan GP', start: isoFromNow(24), end: isoFromNow(26), isRecurring: false },
   ];
 
   const filtered = filterEventsForDailyBrief(events, {
@@ -135,6 +140,66 @@ test('filterEventsForDailyBrief can exclude synced calendars from brief generati
   });
 
   assert.deepEqual(filtered.map((event) => event.id), ['work_1']);
+});
+
+test('parseIcsEvents expands weekly RRULE events inside the sync window', () => {
+  const events = parseIcsEvents({
+    sourceId: 'ics_work',
+    calendarId: 'ics_work:https://example.com/work.ics',
+    calendarSummary: 'Work',
+    text: [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'UID:teaching-1@example.com',
+      'DTSTART:20260401T100000',
+      'DTEND:20260401T113000',
+      'RRULE:FREQ=WEEKLY;BYDAY=WE;UNTIL=20260430T215959Z',
+      'SUMMARY:Teaching Seminar',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\n'),
+    timeMin: '2026-04-14T00:00:00.000Z',
+    timeMax: '2026-04-22T23:59:59.000Z',
+  });
+
+  assert.deepEqual(events.map((event) => event.start), [
+    '2026-04-15T10:00:00',
+    '2026-04-22T10:00:00',
+  ]);
+  assert.equal(events.every((event) => event.isRecurring), true);
+});
+
+test('parseIcsEvents applies EXDATE and recurrence overrides', () => {
+  const events = parseIcsEvents({
+    sourceId: 'ics_family',
+    calendarId: 'ics_family:https://example.com/family.ics',
+    calendarSummary: 'Family',
+    text: [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'UID:family-1@example.com',
+      'DTSTART:20260401T170000',
+      'DTEND:20260401T180000',
+      'RRULE:FREQ=WEEKLY;BYDAY=WE;COUNT=4',
+      'EXDATE:20260415T170000',
+      'SUMMARY:Family recurring',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:family-1@example.com',
+      'RECURRENCE-ID:20260422T170000',
+      'DTSTART:20260422T190000',
+      'DTEND:20260422T200000',
+      'SUMMARY:Family moved',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\n'),
+    timeMin: '2026-04-14T00:00:00.000Z',
+    timeMax: '2026-04-24T23:59:59.000Z',
+  });
+
+  assert.deepEqual(events.map((event) => `${event.title}:${event.start}`), [
+    'Family moved:2026-04-22T19:00:00',
+  ]);
 });
 
 test('buildCalendarCacheFingerprint changes when calendar events change', () => {
@@ -200,6 +265,19 @@ test('buildGoogleCalendarErrorSource marks invalid grants as reconnect required'
   assert.equal(source.status, 'error');
   assert.equal(source.reconnectRequired, true);
   assert.match(source.error, /Reconnect Google Calendar/);
+});
+
+test('readRuntimeJsonIfExists resets corrupt runtime JSON files', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mirrorial-cache-'));
+  const targetPath = path.join(dir, 'geocode.json');
+  await fs.writeFile(targetPath, '{"entries":', 'utf8');
+
+  const value = await readRuntimeJsonIfExists(targetPath, { entries: {} });
+  const remainingFiles = await fs.readdir(dir);
+
+  assert.deepEqual(value, { entries: {} });
+  assert.equal(await fs.pathExists(targetPath), false);
+  assert.ok(remainingFiles.some((file) => file.startsWith('geocode.json.corrupt-')));
 });
 
 test('normalizeConfig preserves module settings after a layout module is removed', () => {
@@ -526,6 +604,43 @@ test('inferTripAnchorFromEvent extracts German travel destinations from event ti
 
   assert.ok(anchor);
   assert.equal(anchor.destination, 'Athen');
+});
+
+test('inferTripAnchorFromEvent suppresses trips to the configured home city', () => {
+  const event = {
+    id: 'evt_home_city_trip',
+    title: 'Mucki Business trip Hamburg',
+    description: '',
+    location: '',
+    start: isoDateOffset(2),
+    end: isoDateOffset(4),
+    isAllDay: true,
+    calendarSummary: 'Work',
+  };
+
+  const anchor = inferTripAnchorFromEvent(
+    event,
+    {
+      moduleSettings: {
+        weather: {
+          location: 'Hamburg',
+          city: 'Hamburg',
+        },
+      },
+      services: { context: {} },
+    },
+    {
+      home: {
+        label: 'Home',
+        location: {
+          label: 'Hamburg, Germany',
+          name: 'Hamburg',
+        },
+      },
+    },
+  );
+
+  assert.equal(anchor, null);
 });
 
 test('buildContextCandidates ranks active travel above lower-priority household items', () => {

@@ -666,62 +666,86 @@ const readJsonIfExists = async (targetPath, fallbackValue) => {
   return fs.readJson(targetPath);
 };
 
+const readRuntimeJsonIfExists = async (targetPath, fallbackValue) => {
+  if (!await fs.pathExists(targetPath)) {
+    return clone(fallbackValue);
+  }
+
+  try {
+    return await fs.readJson(targetPath);
+  } catch (error) {
+    const backupPath = `${targetPath}.corrupt-${Date.now()}`;
+    await fs.move(targetPath, backupPath, { overwrite: true }).catch(() => {});
+    console.error(`Runtime JSON cache was corrupt and has been reset: ${targetPath} (${error.message})`);
+    return clone(fallbackValue);
+  }
+};
+
+const writeJsonAtomic = async (targetPath, payload, options = {}) => {
+  await ensureRuntimePaths();
+  await fs.ensureDir(path.dirname(targetPath));
+  const tempPath = path.join(
+    path.dirname(targetPath),
+    `.${path.basename(targetPath)}.${process.pid}.${Date.now()}.tmp`,
+  );
+  await fs.writeJson(tempPath, payload, options);
+  await fs.move(tempPath, targetPath, { overwrite: true });
+  if (options.mode) {
+    await fs.chmod(targetPath, options.mode).catch(() => {});
+  }
+};
+
 const readTransportCache = async () => {
-  const cache = await readJsonIfExists(TRANSPORT_CACHE_PATH, { entries: {} });
+  const cache = await readRuntimeJsonIfExists(TRANSPORT_CACHE_PATH, { entries: {} });
   return {
     entries: cache.entries && typeof cache.entries === 'object' ? cache.entries : {},
   };
 };
 
 const readRoutingCache = async () => {
-  const cache = await readJsonIfExists(ROUTING_CACHE_PATH, { entries: {} });
+  const cache = await readRuntimeJsonIfExists(ROUTING_CACHE_PATH, { entries: {} });
   return {
     entries: cache.entries && typeof cache.entries === 'object' ? cache.entries : {},
   };
 };
 
 const writeTransportCache = async (cache) => {
-  await ensureRuntimePaths();
-  await fs.writeJson(TRANSPORT_CACHE_PATH, cache, { spaces: 2 });
+  await writeJsonAtomic(TRANSPORT_CACHE_PATH, cache, { spaces: 2 });
 };
 
 const writeRoutingCache = async (cache) => {
-  await ensureRuntimePaths();
-  await fs.writeJson(ROUTING_CACHE_PATH, cache, { spaces: 2 });
+  await writeJsonAtomic(ROUTING_CACHE_PATH, cache, { spaces: 2 });
 };
 
-const readDisplayStatus = async () => readJsonIfExists(DISPLAY_STATUS_PATH, {
+const readDisplayStatus = async () => readRuntimeJsonIfExists(DISPLAY_STATUS_PATH, {
   width: null,
   height: null,
   devicePixelRatio: null,
   updatedAt: null,
 });
 
-const readDailyBriefDebug = async () => readJsonIfExists(DAILY_BRIEF_DEBUG_PATH, {
+const readDailyBriefDebug = async () => readRuntimeJsonIfExists(DAILY_BRIEF_DEBUG_PATH, {
   updatedAt: null,
   status: 'idle',
   stages: {},
 });
 
-const readTravelTimeDebug = async () => readJsonIfExists(TRAVEL_TIME_DEBUG_PATH, {
+const readTravelTimeDebug = async () => readRuntimeJsonIfExists(TRAVEL_TIME_DEBUG_PATH, {
   updatedAt: null,
   items: [],
   config: {},
 });
 
 const writeDailyBriefDebug = async (payload) => {
-  await ensureRuntimePaths();
-  await fs.writeJson(DAILY_BRIEF_DEBUG_PATH, payload, { spaces: 2 });
+  await writeJsonAtomic(DAILY_BRIEF_DEBUG_PATH, payload, { spaces: 2 });
 };
 
 const writeTravelTimeDebug = async (payload) => {
-  await ensureRuntimePaths();
-  await fs.writeJson(TRAVEL_TIME_DEBUG_PATH, payload, { spaces: 2 });
+  await writeJsonAtomic(TRAVEL_TIME_DEBUG_PATH, payload, { spaces: 2 });
 };
 
 const writeDisplayStatus = async (status) => {
-  await ensureRuntimePaths();
-  await fs.writeJson(DISPLAY_STATUS_PATH, status, { spaces: 2 });
+  await writeJsonAtomic(DISPLAY_STATUS_PATH, status, { spaces: 2 });
 };
 
 const decodeJwtPayload = (token) => {
@@ -895,16 +919,14 @@ const normalizeHousehold = (rawHousehold = {}) => {
 };
 
 const readGeocodeCache = async () => {
-  const cache = await readJsonIfExists(GEOCODE_CACHE_PATH, { entries: {} });
+  const cache = await readRuntimeJsonIfExists(GEOCODE_CACHE_PATH, { entries: {} });
   return {
     entries: cache.entries && typeof cache.entries === 'object' ? cache.entries : {},
   };
 };
 
 const writeGeocodeCache = async (cache) => {
-  await ensureRuntimePaths();
-  await fs.writeJson(GEOCODE_CACHE_PATH, cache, { spaces: 2, mode: 0o600 });
-  await fs.chmod(GEOCODE_CACHE_PATH, 0o600).catch(() => {});
+  await writeJsonAtomic(GEOCODE_CACHE_PATH, cache, { spaces: 2, mode: 0o600 });
 };
 
 const readHousehold = async () => normalizeHousehold(await readJsonIfExists(HOUSEHOLD_PATH, DEFAULT_HOUSEHOLD));
@@ -1516,63 +1538,345 @@ const parseIcsDateValue = (value, isAllDay = false) => {
   return normalized;
 };
 
-const parseIcsEvents = ({ sourceId, calendarId, calendarSummary, calendarColor = '', text, defaultUrl = '' }) => {
+const parseIcsBlockProps = (block) => {
+  const props = {};
+  block.split('\n').forEach((line) => {
+    const separatorIndex = line.indexOf(':');
+    if (separatorIndex <= 0) {
+      return;
+    }
+    const rawKey = line.slice(0, separatorIndex);
+    const value = line.slice(separatorIndex + 1);
+    const key = rawKey.split(';')[0].toUpperCase();
+    const params = rawKey.includes(';')
+      ? rawKey.split(';').slice(1).reduce((acc, segment) => {
+        const [paramKey, paramValue] = segment.split('=');
+        if (paramKey && paramValue) {
+          acc[paramKey.toUpperCase()] = paramValue;
+        }
+        return acc;
+      }, {})
+      : {};
+    if (!props[key]) {
+      props[key] = [];
+    }
+    props[key].push({ value, params });
+  });
+  return props;
+};
+
+const parseIcsRrule = (value = '') => value.split(';').reduce((rule, segment) => {
+  const [rawKey, rawValue] = segment.split('=');
+  const key = (rawKey || '').trim().toUpperCase();
+  const normalizedValue = (rawValue || '').trim();
+  if (!key || !normalizedValue) {
+    return rule;
+  }
+  if (key === 'INTERVAL' || key === 'COUNT') {
+    rule[key.toLowerCase()] = Math.max(1, Number.parseInt(normalizedValue, 10) || 1);
+    return rule;
+  }
+  if (key === 'BYDAY') {
+    rule.byDay = normalizedValue.split(',').map((entry) => entry.replace(/^-?\d+/, '').toUpperCase()).filter(Boolean);
+    return rule;
+  }
+  rule[key.toLowerCase()] = normalizedValue;
+  return rule;
+}, {});
+
+const ICS_WEEKDAY_TO_INDEX = {
+  SU: 0,
+  MO: 1,
+  TU: 2,
+  WE: 3,
+  TH: 4,
+  FR: 5,
+  SA: 6,
+};
+
+const parseIcsDateToDate = (value, isAllDay = false) => {
+  const parsed = parseIcsDateValue(value, isAllDay);
+  if (!parsed) {
+    return null;
+  }
+  const date = new Date(parsed);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const getIcsPropDate = (prop, isAllDay = false) => parseIcsDateToDate(prop?.value, isAllDay);
+
+const formatIcsOccurrenceDate = (date, templateValue = '', isAllDay = false) => {
+  const pad = (value) => String(value).padStart(2, '0');
+  if (isAllDay) {
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  }
+  if (`${templateValue || ''}`.trim().endsWith('Z')) {
+    return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  }
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+};
+
+const getIcsRecurrenceKey = (value, isAllDay = false) => {
+  const date = parseIcsDateToDate(value, isAllDay);
+  return date ? String(date.getTime()) : '';
+};
+
+const addIcsDuration = (startDate, durationMs) => new Date(startDate.getTime() + Math.max(0, durationMs));
+
+const eventOverlapsWindow = (event, timeMin = null, timeMax = null) => {
+  const startMs = new Date(event.start).getTime();
+  const endMs = new Date(event.end).getTime();
+  if (Number.isNaN(startMs) || Number.isNaN(endMs)) {
+    return false;
+  }
+  const minMs = timeMin ? new Date(timeMin).getTime() : -Infinity;
+  const maxMs = timeMax ? new Date(timeMax).getTime() : Infinity;
+  return endMs >= minMs && startMs <= maxMs;
+};
+
+const startOfLocalDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+const addLocalDays = (date, days) => new Date(
+  date.getFullYear(),
+  date.getMonth(),
+  date.getDate() + days,
+  date.getHours(),
+  date.getMinutes(),
+  date.getSeconds(),
+  date.getMilliseconds(),
+);
+const addLocalMonths = (date, months) => new Date(
+  date.getFullYear(),
+  date.getMonth() + months,
+  date.getDate(),
+  date.getHours(),
+  date.getMinutes(),
+  date.getSeconds(),
+  date.getMilliseconds(),
+);
+const addLocalYears = (date, years) => new Date(
+  date.getFullYear() + years,
+  date.getMonth(),
+  date.getDate(),
+  date.getHours(),
+  date.getMinutes(),
+  date.getSeconds(),
+  date.getMilliseconds(),
+);
+
+const getWeekStart = (date, weekStartsOn = 1) => {
+  const day = startOfLocalDay(date);
+  const diff = (day.getDay() - weekStartsOn + 7) % 7;
+  day.setDate(day.getDate() - diff);
+  return day;
+};
+
+const buildRecurringIcsStartDates = ({ startDate, rule, isAllDay, timeMin, timeMax }) => {
+  if (!startDate) {
+    return [];
+  }
+  const freq = (rule.freq || '').toUpperCase();
+  const interval = Math.max(1, Number(rule.interval) || 1);
+  const count = Number(rule.count) || Infinity;
+  const until = rule.until ? parseIcsDateToDate(rule.until, isAllDay) : null;
+  const windowStart = timeMin ? new Date(timeMin) : new Date(Date.now() - 86400000);
+  const windowEnd = timeMax ? new Date(timeMax) : new Date(Date.now() + (14 * 86400000));
+  const hardEnd = until && until < windowEnd ? until : windowEnd;
+  const starts = [];
+  const pushIfInWindow = (candidate, sequenceIndex) => {
+    if (sequenceIndex >= count || candidate < startDate || candidate > hardEnd) {
+      return;
+    }
+    if (candidate >= windowStart && candidate <= windowEnd) {
+      starts.push(candidate);
+    }
+  };
+
+  if (freq === 'DAILY') {
+    let sequenceIndex = Math.max(0, Math.floor((startOfLocalDay(windowStart) - startOfLocalDay(startDate)) / 86400000 / interval) - 1);
+    while (sequenceIndex < count && starts.length < 500) {
+      const candidate = addLocalDays(startDate, sequenceIndex * interval);
+      if (candidate > hardEnd) break;
+      pushIfInWindow(candidate, sequenceIndex);
+      sequenceIndex += 1;
+    }
+    return starts;
+  }
+
+  if (freq === 'WEEKLY') {
+    const weekStartsOn = ICS_WEEKDAY_TO_INDEX[(rule.wkst || 'MO').toUpperCase()] ?? 1;
+    const byDays = (Array.isArray(rule.byDay) && rule.byDay.length ? rule.byDay : null)
+      ?.map((day) => ICS_WEEKDAY_TO_INDEX[day])
+      .filter((day) => day !== undefined) || [startDate.getDay()];
+    const firstWeek = getWeekStart(startDate, weekStartsOn);
+    let candidateWeek = getWeekStart(addLocalDays(windowStart, -7), weekStartsOn);
+    let sequenceIndex = 0;
+    while (candidateWeek <= hardEnd && starts.length < 500) {
+      const weekOffset = Math.round((candidateWeek - firstWeek) / (7 * 86400000));
+      if (weekOffset >= 0 && weekOffset % interval === 0) {
+        byDays.forEach((day) => {
+          const dayOffset = (day - weekStartsOn + 7) % 7;
+          const candidateDay = addLocalDays(candidateWeek, dayOffset);
+          const candidate = new Date(
+            candidateDay.getFullYear(),
+            candidateDay.getMonth(),
+            candidateDay.getDate(),
+            startDate.getHours(),
+            startDate.getMinutes(),
+            startDate.getSeconds(),
+            startDate.getMilliseconds(),
+          );
+          if (candidate >= startDate) {
+            pushIfInWindow(candidate, sequenceIndex);
+            sequenceIndex += 1;
+          }
+        });
+      }
+      candidateWeek = addLocalDays(candidateWeek, 7);
+    }
+    return starts.sort((left, right) => left - right);
+  }
+
+  if (freq === 'MONTHLY' || freq === 'YEARLY') {
+    const step = freq === 'MONTHLY' ? addLocalMonths : addLocalYears;
+    let sequenceIndex = 0;
+    let candidate = startDate;
+    while (candidate <= hardEnd && sequenceIndex < count && starts.length < 500) {
+      pushIfInWindow(candidate, sequenceIndex);
+      sequenceIndex += 1;
+      candidate = step(startDate, sequenceIndex * interval);
+    }
+    return starts;
+  }
+
+  return [];
+};
+
+const buildIcsEventFromProps = ({
+  sourceId,
+  calendarId,
+  calendarSummary,
+  calendarColor,
+  defaultUrl,
+  props,
+  index,
+  occurrenceStart = null,
+  occurrenceIndex = null,
+}) => {
+  const uid = props.UID?.[0]?.value || `${sourceId}:${calendarId}:${index + 1}`;
+  const startMeta = props.DTSTART?.[0] || null;
+  const endMeta = props.DTEND?.[0] || null;
+  const isAllDay = (startMeta?.params?.VALUE || '').toUpperCase() === 'DATE' || /^\d{8}$/.test(startMeta?.value || '');
+  const startDate = occurrenceStart || getIcsPropDate(startMeta, isAllDay);
+  const originalStartDate = getIcsPropDate(startMeta, isAllDay);
+  const originalEndDate = getIcsPropDate(endMeta || startMeta, isAllDay) || originalStartDate;
+  if (!startDate || !originalStartDate || !originalEndDate) {
+    return null;
+  }
+  const durationMs = originalEndDate.getTime() - originalStartDate.getTime();
+  const endDate = occurrenceStart ? addIcsDuration(occurrenceStart, durationMs) : originalEndDate;
+  const status = decodeIcsText(props.STATUS?.[0]?.value || 'confirmed').toLowerCase();
+  const recurrenceId = props['RECURRENCE-ID']?.[0]?.value || '';
+  const isRecurring = Boolean(props.RRULE?.[0]?.value || recurrenceId || occurrenceStart);
+  const suffix = occurrenceIndex !== null
+    ? `:${formatIcsOccurrenceDate(occurrenceStart, startMeta?.value, isAllDay)}`
+    : (recurrenceId ? `:${recurrenceId}` : '');
+
+  return {
+    id: `${sourceId}:${uid}${suffix}`,
+    sourceId,
+    status,
+    title: decodeIcsText(props.SUMMARY?.[0]?.value || '(No title)'),
+    description: decodeIcsText(props.DESCRIPTION?.[0]?.value || ''),
+    location: decodeIcsText(props.LOCATION?.[0]?.value || ''),
+    start: formatIcsOccurrenceDate(startDate, startMeta?.value, isAllDay),
+    end: formatIcsOccurrenceDate(endDate, endMeta?.value || startMeta?.value, isAllDay),
+    isAllDay,
+    htmlLink: decodeIcsText(props.URL?.[0]?.value || defaultUrl || ''),
+    calendarId,
+    calendarSummary,
+    calendarColor,
+    calendarTextColor: '',
+    isRecurring,
+    recurringEventId: decodeIcsText(props.UID?.[0]?.value || ''),
+    attendees: [],
+  };
+};
+
+const getIcsExdateKeys = (props, isAllDay) => new Set((props.EXDATE || [])
+  .flatMap((entry) => `${entry.value || ''}`.split(','))
+  .map((value) => getIcsRecurrenceKey(value, isAllDay))
+  .filter(Boolean));
+
+const parseIcsEvents = ({ sourceId, calendarId, calendarSummary, calendarColor = '', text, defaultUrl = '', timeMin = null, timeMax = null }) => {
   const unfolded = unfoldIcsLines(text);
   const blocks = unfolded.match(/BEGIN:VEVENT[\s\S]*?END:VEVENT/g) || [];
-  return blocks.map((block, index) => {
-    const lines = block.split('\n');
-    const props = {};
-    lines.forEach((line) => {
-      const separatorIndex = line.indexOf(':');
-      if (separatorIndex <= 0) {
+  const parsedBlocks = blocks.map((block, index) => ({ props: parseIcsBlockProps(block), index }));
+  const overridesByUid = new Map();
+  parsedBlocks
+    .filter(({ props }) => props['RECURRENCE-ID']?.[0]?.value)
+    .forEach(({ props }) => {
+      const uid = props.UID?.[0]?.value || '';
+      const startMeta = props.DTSTART?.[0] || null;
+      const isAllDay = (startMeta?.params?.VALUE || '').toUpperCase() === 'DATE' || /^\d{8}$/.test(startMeta?.value || '');
+      const key = getIcsRecurrenceKey(props['RECURRENCE-ID']?.[0]?.value, isAllDay);
+      if (!uid || !key) {
         return;
       }
-      const rawKey = line.slice(0, separatorIndex);
-      const value = line.slice(separatorIndex + 1);
-      const key = rawKey.split(';')[0].toUpperCase();
-      const params = rawKey.includes(';')
-        ? rawKey.split(';').slice(1).reduce((acc, segment) => {
-          const [paramKey, paramValue] = segment.split('=');
-          if (paramKey && paramValue) {
-            acc[paramKey.toUpperCase()] = paramValue;
-          }
-          return acc;
-        }, {})
-        : {};
-      if (!props[key]) {
-        props[key] = [];
+      if (!overridesByUid.has(uid)) {
+        overridesByUid.set(uid, new Map());
       }
-      props[key].push({ value, params });
+      overridesByUid.get(uid).set(key, props);
     });
 
+  const events = [];
+  parsedBlocks.forEach(({ props, index }) => {
     const uid = props.UID?.[0]?.value || `${sourceId}:${calendarId}:${index + 1}`;
     const startMeta = props.DTSTART?.[0] || null;
-    const endMeta = props.DTEND?.[0] || null;
     const isAllDay = (startMeta?.params?.VALUE || '').toUpperCase() === 'DATE' || /^\d{8}$/.test(startMeta?.value || '');
-    const start = parseIcsDateValue(startMeta?.value, isAllDay);
-    const end = parseIcsDateValue(endMeta?.value || startMeta?.value, isAllDay) || start;
     const status = decodeIcsText(props.STATUS?.[0]?.value || 'confirmed').toLowerCase();
+    if (props['RECURRENCE-ID']?.[0]?.value) {
+      const overrideEvent = buildIcsEventFromProps({ sourceId, calendarId, calendarSummary, calendarColor, defaultUrl, props, index });
+      if (overrideEvent && overrideEvent.status !== 'cancelled' && eventOverlapsWindow(overrideEvent, timeMin, timeMax)) {
+        events.push(overrideEvent);
+      }
+      return;
+    }
 
-    return {
-      id: `${sourceId}:${uid}`,
-      sourceId,
-      status,
-      title: decodeIcsText(props.SUMMARY?.[0]?.value || '(No title)'),
-      description: decodeIcsText(props.DESCRIPTION?.[0]?.value || ''),
-      location: decodeIcsText(props.LOCATION?.[0]?.value || ''),
-      start,
-      end,
-      isAllDay,
-      htmlLink: decodeIcsText(props.URL?.[0]?.value || defaultUrl || ''),
-      calendarId,
-      calendarSummary,
-      calendarColor,
-      calendarTextColor: '',
-      isRecurring: Boolean(props.RRULE?.[0]?.value || props['RECURRENCE-ID']?.[0]?.value),
-      recurringEventId: decodeIcsText(props.UID?.[0]?.value || ''),
-      attendees: [],
-    };
-  }).filter((event) => event.start && event.end && event.status !== 'cancelled');
+    const rrule = props.RRULE?.[0]?.value ? parseIcsRrule(props.RRULE[0].value) : null;
+    if (rrule?.freq) {
+      const startDate = getIcsPropDate(startMeta, isAllDay);
+      const overrideKeys = overridesByUid.get(uid) || new Map();
+      const exdateKeys = getIcsExdateKeys(props, isAllDay);
+      buildRecurringIcsStartDates({ startDate, rule: rrule, isAllDay, timeMin, timeMax }).forEach((occurrenceStart, occurrenceIndex) => {
+        const recurrenceKey = String(occurrenceStart.getTime());
+        if (exdateKeys.has(recurrenceKey) || overrideKeys.has(recurrenceKey)) {
+          return;
+        }
+        const event = buildIcsEventFromProps({
+          sourceId,
+          calendarId,
+          calendarSummary,
+          calendarColor,
+          defaultUrl,
+          props,
+          index,
+          occurrenceStart,
+          occurrenceIndex,
+        });
+        if (event && event.status !== 'cancelled' && eventOverlapsWindow(event, timeMin, timeMax)) {
+          events.push(event);
+        }
+      });
+      return;
+    }
+
+    const event = buildIcsEventFromProps({ sourceId, calendarId, calendarSummary, calendarColor, defaultUrl, props, index });
+    if (event && status !== 'cancelled' && eventOverlapsWindow(event, timeMin, timeMax)) {
+      events.push(event);
+    }
+  });
+
+  return events.sort((left, right) => new Date(left.start) - new Date(right.start));
 };
 
 const buildSourceCalendarId = (sourceId, rawCalendarId) => `${sourceId}:${rawCalendarId}`;
@@ -1715,6 +2019,8 @@ const fetchCalDavEvents = async ({ source, password, timeMin, timeMax }) => {
           calendarColor: normalizedCalendar.backgroundColor,
           text: calendarData,
           defaultUrl: calendar.url,
+          timeMin,
+          timeMax,
         }),
       );
     });
@@ -1730,7 +2036,7 @@ const fetchCalDavEvents = async ({ source, password, timeMin, timeMax }) => {
   };
 };
 
-const fetchIcsEvents = async ({ source, password }) => {
+const fetchIcsEvents = async ({ source, password, timeMin, timeMax }) => {
   const response = await axios.get(source.url, {
     timeout: 15000,
     responseType: 'text',
@@ -1751,6 +2057,8 @@ const fetchIcsEvents = async ({ source, password }) => {
       calendarColor: calendar.backgroundColor,
       text: typeof response.data === 'string' ? response.data : `${response.data || ''}`,
       defaultUrl: source.url,
+      timeMin,
+      timeMax,
     }),
   };
 };
@@ -1764,7 +2072,7 @@ const fetchCalendarSourceBundle = async ({ source, secrets, timeMin, timeMax }) 
     const password = secrets?.calendarSources?.[source.id]?.password || '';
     const payload = source.type === 'caldav'
       ? await fetchCalDavEvents({ source, password, timeMin, timeMax })
-      : await fetchIcsEvents({ source, password });
+      : await fetchIcsEvents({ source, password, timeMin, timeMax });
     return {
       calendars: payload.calendars,
       events: payload.events,
@@ -2255,6 +2563,37 @@ const hasUsefulLocationSignal = (event, config, household) => {
 
 const isGenericDestinationLabel = (value = '') => GENERIC_DESTINATION_PATTERN.test(value.trim().toLowerCase());
 
+const normalizePlaceLabel = (value = '') => value
+  .toString()
+  .trim()
+  .toLowerCase()
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^a-z0-9\s]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const getHomeDestinationLabels = (config = null, household = null) => {
+  const weatherConfig = findWeatherModuleConfig(config);
+  return new Set([
+    household?.home?.label,
+    household?.home?.location?.label,
+    household?.home?.location?.name,
+    household?.home?.location?.admin1,
+    weatherConfig?.displayName,
+    weatherConfig?.location,
+    weatherConfig?.city,
+  ].map(normalizePlaceLabel).filter(Boolean));
+};
+
+const isHomeDestinationLabel = (destination = '', config = null, household = null) => {
+  const normalizedDestination = normalizePlaceLabel(destination);
+  if (!normalizedDestination) {
+    return false;
+  }
+  return getHomeDestinationLabels(config, household).has(normalizedDestination);
+};
+
 const inferTripAnchorFromEvent = (event, config = null, household = null) => {
   const rawDestination = extractDestination(event);
   const usefulLocationLabel = findUsefulLocationToken(event, config, household);
@@ -2270,6 +2609,10 @@ const inferTripAnchorFromEvent = (event, config = null, household = null) => {
   }
 
   if (isGenericDestinationLabel(destination)) {
+    return null;
+  }
+
+  if (isHomeDestinationLabel(destination, config, household)) {
     return null;
   }
 
@@ -2860,8 +3203,12 @@ const isEventIncludedInDailyBrief = (event, config) => {
   return true;
 };
 
-const filterEventsForDailyBrief = (events, config) => (Array.isArray(events) ? events : [])
-  .filter((event) => isEventIncludedInDailyBrief(event, config));
+const filterEventsForDailyBrief = (events, config) => {
+  const now = Date.now();
+  return (Array.isArray(events) ? events : [])
+    .filter((event) => isEventIncludedInDailyBrief(event, config))
+    .filter((event) => explainBriefEventSelection(event, config, now).include);
+};
 
 const classifyHouseholdEvent = (event) => {
   const combinedText = [
@@ -5018,16 +5365,16 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, trave
     || nextEvent.id === commuteContext?.sourceEventId
   );
 
-  if (nextEvent && !skipNextEventBullet) {
-    const start = new Date(nextEvent.start);
-    const startLabel = nextEvent.isAllDay
-      ? start.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
-      : start.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-    const householdView = buildNextEventHouseholdView(nextEvent);
-    const nextEventHours = hoursUntil(nextEvent.start);
-    if (householdView || nextEventHours <= 12) {
-      const score = Math.max(30, 54 - Math.max(0, nextEventHours));
-      candidates.push({
+	  if (nextEvent && !skipNextEventBullet) {
+	    const start = new Date(nextEvent.start);
+	    const startLabel = nextEvent.isAllDay
+	      ? start.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+	      : start.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+	    const householdView = buildNextEventHouseholdView(nextEvent);
+	    const nextEventHours = hoursUntil(nextEvent.start);
+	    if (householdView) {
+	      const score = Math.max(30, 54 - Math.max(0, nextEventHours));
+	      candidates.push({
         id: 'next_event',
         kind: 'next_event',
         score,
@@ -7219,7 +7566,7 @@ const ensureFreshContextCache = async () => {
   const [secrets, household] = await Promise.all([readSecrets(), readHousehold()]);
   try {
     const rebuiltContext = await buildContext(calendarCache, config, secrets, household, context, true);
-    await fs.writeJson(CONTEXT_CACHE_PATH, rebuiltContext, { spaces: 2 });
+    await writeJsonAtomic(CONTEXT_CACHE_PATH, rebuiltContext, { spaces: 2 });
     return { context: rebuiltContext, config };
   } catch (error) {
     console.error('Context rebuild failed:', error.message);
@@ -7235,7 +7582,7 @@ const syncCalendarData = async ({ forceContext = false } = {}) => {
     readHousehold(),
     readCalendarSources(),
   ]);
-  const previousCalendarCache = await readJsonIfExists(CALENDAR_CACHE_PATH, DEFAULT_CALENDAR_CACHE);
+  const previousCalendarCache = await readRuntimeJsonIfExists(CALENDAR_CACHE_PATH, DEFAULT_CALENDAR_CACHE);
   let googleBundle = null;
   let googleSource = null;
   try {
@@ -7274,9 +7621,9 @@ const syncCalendarData = async ({ forceContext = false } = {}) => {
   };
 
   const calendarChanged = buildCalendarCacheFingerprint(previousCalendarCache) !== buildCalendarCacheFingerprint(calendarCache);
-  await fs.writeJson(CALENDAR_CACHE_PATH, calendarCache, { spaces: 2 });
+  await writeJsonAtomic(CALENDAR_CACHE_PATH, calendarCache, { spaces: 2 });
 
-  const existingContext = await readJsonIfExists(CONTEXT_CACHE_PATH, null);
+  const existingContext = await readRuntimeJsonIfExists(CONTEXT_CACHE_PATH, null);
   const refreshMinutes = resolveContextRefreshMinutes(config.services.context);
   const shouldRefreshContext = forceContext
     || calendarChanged
@@ -7286,7 +7633,7 @@ const syncCalendarData = async ({ forceContext = false } = {}) => {
   if (shouldRefreshContext) {
     try {
       const context = await buildContext(calendarCache, config, secrets, household, existingContext, forceContext || calendarChanged);
-      await fs.writeJson(CONTEXT_CACHE_PATH, context, { spaces: 2 });
+      await writeJsonAtomic(CONTEXT_CACHE_PATH, context, { spaces: 2 });
     } catch (error) {
       console.error('Context rebuild failed:', error.message);
       await writeContextBuildFailureDebug({ error, calendarCache, config, existingContext });
@@ -7298,9 +7645,9 @@ const syncCalendarData = async ({ forceContext = false } = {}) => {
 
 const syncGoogleCalendarData = async ({ forceContext = false } = {}) => syncCalendarData({ forceContext });
 
-const loadCalendarCache = async () => readJsonIfExists(CALENDAR_CACHE_PATH, DEFAULT_CALENDAR_CACHE);
+const loadCalendarCache = async () => readRuntimeJsonIfExists(CALENDAR_CACHE_PATH, DEFAULT_CALENDAR_CACHE);
 
-const loadContextCache = async () => readJsonIfExists(CONTEXT_CACHE_PATH, {
+const loadContextCache = async () => readRuntimeJsonIfExists(CONTEXT_CACHE_PATH, {
   updatedAt: null,
   refreshMinutes: DEFAULT_CONTEXT_REFRESH_MINUTES,
   activeTrip: null,
@@ -7453,11 +7800,11 @@ app.post('/api/household', async (req, res) => {
       readConfig(),
       readSecrets(),
       loadCalendarCache(),
-      readJsonIfExists(CONTEXT_CACHE_PATH, null),
+      readRuntimeJsonIfExists(CONTEXT_CACHE_PATH, null),
     ]);
 
     const context = await buildContext(calendarCache, config, secrets, household, existingContext, false);
-    await fs.writeJson(CONTEXT_CACHE_PATH, context, { spaces: 2 });
+    await writeJsonAtomic(CONTEXT_CACHE_PATH, context, { spaces: 2 });
 
     res.json({ success: true, household });
   } catch (error) {
@@ -7887,6 +8234,8 @@ module.exports = {
   selectContextBrief,
   buildBriefItemsFromBrief,
   normalizeConfig,
+  parseIcsEvents,
+  readRuntimeJsonIfExists,
   resolveContextRefreshMinutes,
   validateConfigForSave,
   validateLlmSelection,
