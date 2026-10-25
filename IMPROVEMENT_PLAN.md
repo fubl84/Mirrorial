@@ -52,6 +52,14 @@ rate limit trips; URL guard cases tested; display app and remote UI still work.
 - 2.3 Parse `responseStatus` (declined), `eventType`, `transparency` and `status: cancelled` from Google; drop declined/cancelled.
 - 2.4 Replace the hard "top 18 of 14 days" cut with time-bucketed selection (today, tomorrow, next 7 days, long-range highlights).
 - 2.5 Tests with fixtures derived from the real debug snapshot.
+- 2.6 **Subscription-first calendars** (decision 2026-10-25: Google OAuth is no longer the primary path, so non-technical
+  users are not tied to one provider). Calendars are connected by pasting an iCal/webcal link or a CalDAV account.
+  - `webcal://` / `webcals://` links work (they never did: axios cannot fetch them); https first, http fallback.
+  - Friendly error when the link does not return a calendar; calendar name taken from `X-WR-CALNAME` when none is entered.
+  - Redirects are re-checked by the URL guard; download size is capped.
+  - "Test this link" endpoint + button: shows calendar name, event count and the next events before saving.
+  - Declined events (`ATTENDEE;PARTSTAT=DECLINED`) are hidden when the user's own address is known (optional per source).
+  - Google stays available but is no longer the default section; no Google-only fields are required by any rule.
 
 ## Phase 3 – New brief pipeline (single LLM call, structured, verifiable)
 
@@ -124,7 +132,15 @@ Gaps to close:
   Gemini key in header, no upstream error details to clients, remote UI login. 81 backend tests green, live smoke test done.
   Left for later: `npm audit` still reports 3 moderate (uuid via google-auth-library/gaxios, needs a breaking upgrade);
   the display app still reads the HA token from `config.json` on disk (by design, file is now mode 0600).
-- [ ] Phase 2
+- [x] Phase 2 – new pure modules `src/brief/{rules,selection,horizon}.js`, `src/time/zone.js`, `src/calendar/{subscription,icsMeta}.js`.
+  Medical appointments and schedule changes are always kept; hard-coded personal rules replaced by `services.context.rules`
+  (always show / never show / routine hints, editable in the UI); recurring items only surface within 1 day; time-bucketed
+  selection instead of "top 18 of 14 days"; declined/cancelled dropped (ICS `PARTSTAT` via own addresses, Google `self`).
+  Subscription-first: `webcal://` works, "Test this link" endpoint + button, friendly errors, redirects re-checked, size cap,
+  calendar name from `X-WR-CALNAME`, Calendars section is now the default. Bug fixed on the way: `VALARM` blocks overwrote
+  the event description. 114 backend tests green; live check against a local feed server (redirects, 401, oversize, auth).
+  Open: the routine pattern still hides any non-recurring title containing "lesson"/"unterricht" (e.g. "Online Lessons
+  Monthly Performance & Achievement Update"); decide in Phase 3 whether that stays a hard rule.
 - [ ] Phase 3
 - [ ] Phase 4
 - [ ] Phase 5

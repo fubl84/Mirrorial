@@ -32,6 +32,21 @@ const {
   restoreHomeAssistantToken,
   stripHomeAssistantToken,
 } = require('./src/security/haToken');
+const { classifyBriefEvent, isLowValueRoutineEvent, DISTINCTIVE_EVENT_PATTERN } = require('./src/brief/selection');
+const { selectEventsByHorizon } = require('./src/brief/horizon');
+const {
+  MAX_ICS_BYTES,
+  assertSafeRedirectTarget,
+  describeFetchError,
+  fetchSubscriptionText,
+} = require('./src/calendar/subscription');
+const {
+  getCalendarNameFromIcs,
+  isDeclinedForOwner,
+  parseOwnerEmails,
+  splitIcsContentLine,
+} = require('./src/calendar/icsMeta');
+const { hasMedicalSignal, normalizeContextRules } = require('./src/brief/rules');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -186,6 +201,7 @@ const DEFAULT_CONFIG = {
       birthdayLookaheadDays: 10,
       usefulLocationWhitelist: [],
       eventHintRules: [],
+      rules: { alwaysShow: [], neverShow: [], routineHints: [] },
       briefCalendarMode: 'exclude_selected',
       briefIncludedCalendarIds: [],
       briefExcludedCalendarIds: [],
@@ -697,6 +713,7 @@ const normalizeConfig = (rawConfig = {}) => {
     ...config.services.context,
     refreshMinutes: resolveContextRefreshMinutes(rawConfig?.services?.context || config.services.context),
     eventHintRules: normalizeEventHintRules(rawConfig?.services?.context?.eventHintRules ?? config.services.context.eventHintRules),
+    rules: normalizeContextRules(rawConfig?.services?.context?.rules ?? config.services.context.rules),
   };
   delete config.services.context.refreshHours;
   config.services.llm = {
@@ -1140,6 +1157,7 @@ const normalizeCalendarSource = (source = {}, index = 0) => {
     url: typeof source.url === 'string' ? source.url.trim() : '',
     username: typeof source.username === 'string' ? source.username.trim() : '',
     color: typeof source.color === 'string' ? source.color : '',
+    ownerEmails: parseOwnerEmails(source.ownerEmails),
   };
 };
 
@@ -1538,6 +1556,9 @@ const normalizeEvent = (event, calendar) => {
     isRecurring: Boolean(event.recurringEventId || event.recurringEventId === ''),
     recurringEventId: event.recurringEventId || '',
     attendees: Array.isArray(event.attendees) ? event.attendees.map((attendee) => attendee.email).filter(Boolean) : [],
+    // Google reports the calendar owner's own answer on the attendee entry flagged `self`.
+    declined: Array.isArray(event.attendees)
+      && event.attendees.some((attendee) => attendee?.self === true && attendee?.responseStatus === 'declined'),
   };
 };
 
@@ -1632,27 +1653,16 @@ const parseIcsDateValue = (value, isAllDay = false) => {
 
 const parseIcsBlockProps = (block) => {
   const props = {};
-  block.split('\n').forEach((line) => {
-    const separatorIndex = line.indexOf(':');
-    if (separatorIndex <= 0) {
+  const withoutAlarms = block.replace(/BEGIN:VALARM[\s\S]*?END:VALARM/gi, '');
+  withoutAlarms.split('\n').forEach((line) => {
+    const parsed = splitIcsContentLine(line);
+    if (!parsed) {
       return;
     }
-    const rawKey = line.slice(0, separatorIndex);
-    const value = line.slice(separatorIndex + 1);
-    const key = rawKey.split(';')[0].toUpperCase();
-    const params = rawKey.includes(';')
-      ? rawKey.split(';').slice(1).reduce((acc, segment) => {
-        const [paramKey, paramValue] = segment.split('=');
-        if (paramKey && paramValue) {
-          acc[paramKey.toUpperCase()] = paramValue;
-        }
-        return acc;
-      }, {})
-      : {};
-    if (!props[key]) {
-      props[key] = [];
+    if (!props[parsed.key]) {
+      props[parsed.key] = [];
     }
-    props[key].push({ value, params });
+    props[parsed.key].push({ value: parsed.value, params: parsed.params });
   });
   return props;
 };
@@ -1858,6 +1868,7 @@ const buildIcsEventFromProps = ({
   index,
   occurrenceStart = null,
   occurrenceIndex = null,
+  ownerEmails = [],
 }) => {
   const uid = props.UID?.[0]?.value || `${sourceId}:${calendarId}:${index + 1}`;
   const startMeta = props.DTSTART?.[0] || null;
@@ -1895,7 +1906,8 @@ const buildIcsEventFromProps = ({
     calendarTextColor: '',
     isRecurring,
     recurringEventId: decodeIcsText(props.UID?.[0]?.value || ''),
-    attendees: [],
+    attendees: (props.ATTENDEE || []).map((entry) => `${entry.value || ''}`.replace(/^mailto:/i, '').toLowerCase()).filter(Boolean),
+    declined: isDeclinedForOwner(props, ownerEmails),
   };
 };
 
@@ -1923,7 +1935,7 @@ const isStaleIndefiniteIcsRecurrence = ({ props, rule, startDate, timeMin }) => 
   return startDate.getTime() < staleCutoffMs;
 };
 
-const parseIcsEvents = ({ sourceId, calendarId, calendarSummary, calendarColor = '', text, defaultUrl = '', timeMin = null, timeMax = null }) => {
+const parseIcsEvents = ({ sourceId, calendarId, calendarSummary, calendarColor = '', text, defaultUrl = '', timeMin = null, timeMax = null, ownerEmails = [] }) => {
   const unfolded = unfoldIcsLines(text);
   const blocks = unfolded.match(/BEGIN:VEVENT[\s\S]*?END:VEVENT/g) || [];
   const parsedBlocks = blocks.map((block, index) => ({ props: parseIcsBlockProps(block), index }));
@@ -1951,7 +1963,7 @@ const parseIcsEvents = ({ sourceId, calendarId, calendarSummary, calendarColor =
     const isAllDay = (startMeta?.params?.VALUE || '').toUpperCase() === 'DATE' || /^\d{8}$/.test(startMeta?.value || '');
     const status = decodeIcsText(props.STATUS?.[0]?.value || 'confirmed').toLowerCase();
     if (props['RECURRENCE-ID']?.[0]?.value) {
-      const overrideEvent = buildIcsEventFromProps({ sourceId, calendarId, calendarSummary, calendarColor, defaultUrl, props, index });
+      const overrideEvent = buildIcsEventFromProps({ sourceId, calendarId, calendarSummary, calendarColor, defaultUrl, props, index, ownerEmails });
       if (overrideEvent && overrideEvent.status !== 'cancelled' && eventOverlapsWindow(overrideEvent, timeMin, timeMax)) {
         events.push(overrideEvent);
       }
@@ -1981,6 +1993,7 @@ const parseIcsEvents = ({ sourceId, calendarId, calendarSummary, calendarColor =
           index,
           occurrenceStart,
           occurrenceIndex,
+          ownerEmails,
         });
         if (event && event.status !== 'cancelled' && eventOverlapsWindow(event, timeMin, timeMax)) {
           events.push(event);
@@ -1989,7 +2002,7 @@ const parseIcsEvents = ({ sourceId, calendarId, calendarSummary, calendarColor =
       return;
     }
 
-    const event = buildIcsEventFromProps({ sourceId, calendarId, calendarSummary, calendarColor, defaultUrl, props, index });
+    const event = buildIcsEventFromProps({ sourceId, calendarId, calendarSummary, calendarColor, defaultUrl, props, index, ownerEmails });
     if (event && status !== 'cancelled' && eventOverlapsWindow(event, timeMin, timeMax)) {
       events.push(event);
     }
@@ -2060,8 +2073,7 @@ const discoverCalDavCalendars = async ({ source, password }) => {
           <d:resourcetype />
         </d:prop>
       </d:propfind>`,
-    timeout: 15000,
-    ...buildBasicAuthConfig(source.username, password),
+    ...buildCalendarRequestOptions(source, password, 15000),
   });
 
   const blocks = parseXmlResponseBlocks(response.data);
@@ -2089,7 +2101,17 @@ const discoverCalDavCalendars = async ({ source, password }) => {
     }];
 };
 
+const buildCalendarRequestOptions = (source, password, timeout = 15000) => ({
+  timeout,
+  maxContentLength: MAX_ICS_BYTES,
+  maxBodyLength: MAX_ICS_BYTES,
+  maxRedirects: 5,
+  beforeRedirect: (options) => assertSafeRedirectTarget(options),
+  ...buildBasicAuthConfig(source.username, password),
+});
+
 const fetchCalDavEvents = async ({ source, password, timeMin, timeMax }) => {
+  assertSafeOutboundUrl(source.url, 'Calendar URL');
   const calendars = await discoverCalDavCalendars({ source, password });
   const results = [];
 
@@ -2115,8 +2137,7 @@ const fetchCalDavEvents = async ({ source, password, timeMin, timeMax }) => {
             </c:comp-filter>
           </c:filter>
         </c:calendar-query>`,
-      timeout: 20000,
-      ...buildBasicAuthConfig(source.username, password),
+      ...buildCalendarRequestOptions(source, password, 20000),
     });
 
     const blocks = parseXmlResponseBlocks(response.data);
@@ -2140,6 +2161,7 @@ const fetchCalDavEvents = async ({ source, password, timeMin, timeMax }) => {
           defaultUrl: calendar.url,
           timeMin,
           timeMax,
+          ownerEmails: source.ownerEmails,
         }),
       );
     });
@@ -2156,28 +2178,39 @@ const fetchCalDavEvents = async ({ source, password, timeMin, timeMax }) => {
 };
 
 const fetchIcsEvents = async ({ source, password, timeMin, timeMax }) => {
-  const response = await axios.get(source.url, {
-    timeout: 15000,
-    responseType: 'text',
-    ...buildBasicAuthConfig(source.username, password),
+  const { text, url } = await fetchSubscriptionText({
+    url: source.url,
+    request: async (candidateUrl) => {
+      const response = await axios.get(candidateUrl, {
+        ...buildCalendarRequestOptions(source, password, 15000),
+        responseType: 'text',
+        transformResponse: (data) => data,
+      });
+      return typeof response.data === 'string' ? response.data : `${response.data || ''}`;
+    },
   });
+
+  // The feed usually knows its own name; an entered name always wins.
+  const feedName = getCalendarNameFromIcs(text);
   const calendar = buildSourceCalendar({
     source,
     rawCalendarId: source.url,
-    summary: source.name || source.url,
+    summary: source.name || feedName || source.url,
   });
 
   return {
     calendars: [calendar],
+    feedName,
     events: parseIcsEvents({
       sourceId: source.id,
       calendarId: calendar.id,
       calendarSummary: calendar.summary,
       calendarColor: calendar.backgroundColor,
-      text: typeof response.data === 'string' ? response.data : `${response.data || ''}`,
-      defaultUrl: source.url,
+      text,
+      defaultUrl: url,
       timeMin,
       timeMax,
+      ownerEmails: source.ownerEmails,
     }),
   };
 };
@@ -2198,7 +2231,7 @@ const fetchCalendarSourceBundle = async ({ source, secrets, timeMin, timeMax }) 
       source: {
         id: source.id,
         type: source.type,
-        name: source.name || source.url,
+        name: source.name || payload.feedName || source.url,
         status: 'ready',
         eventCount: payload.events.length,
       },
@@ -2212,7 +2245,7 @@ const fetchCalendarSourceBundle = async ({ source, secrets, timeMin, timeMax }) 
         type: source.type,
         name: source.name || source.url,
         status: 'error',
-        error: error.message,
+        error: describeFetchError(error),
       },
     };
   }
@@ -3141,51 +3174,11 @@ const inferVisitorName = (event) => {
   return title.trim();
 };
 
-const ROUTINE_EVENT_PATTERNS = {
-  workStart: /\b(start arbeiten|start work|shift start|dienstbeginn)\b/i,
-  onlineLesson: /\b(online lessons?|lesson|unterricht)\b/i,
-  genericClass: /\b(gruppe|group|kurs|course|class|training|topics?\s*\d*|flex|jmc\s*\d+|jac\s*\d+)\b/i,
-};
+// Routine detection and brief selection live in ./src/brief (pure, unit-tested). The user's own words
+// (always show / never show / routine hints) come from services.context.rules.
+const getContextRules = (config) => normalizeContextRules(config?.services?.context?.rules);
 
-const PERSON_LIKE_TITLE_PATTERN = /^[A-ZÄÖÜ][\p{L}'-]+(?:\s+[A-ZÄÖÜ][\p{L}'-]+){0,2}$/u;
-const DISTINCTIVE_EVENT_PATTERN = /\b(concert|conference|partner|setup|presentation|tickets?|dinner|meeting|summit|event|rennen|race|tour|show|festival|lunch|prep|overview)\b/i;
-const MUSIC_SCHOOL_LOCATION_PATTERN = /\b(yamaha music school|music school|musikschule)\b/i;
-
-const isLowValueRoutineEvent = (event) => {
-  if (!event) {
-    return false;
-  }
-
-  const title = (event.title || '').trim();
-  const combinedText = [
-    event.title || '',
-    event.description || '',
-    event.location || '',
-  ].join(' ');
-  const schoolLikeCalendar = /\b(schule|school)\b/i.test(event.calendarSummary || '');
-  const musicSchoolLocation = MUSIC_SCHOOL_LOCATION_PATTERN.test(event.location || '');
-  const simpleNameTitle = PERSON_LIKE_TITLE_PATTERN.test(title);
-
-  if (ROUTINE_EVENT_PATTERNS.workStart.test(combinedText) || ROUTINE_EVENT_PATTERNS.onlineLesson.test(combinedText)) {
-    return true;
-  }
-
-  if (event.isRecurring && (schoolLikeCalendar || musicSchoolLocation) && ROUTINE_EVENT_PATTERNS.genericClass.test(title)) {
-    return true;
-  }
-
-  if (event.isRecurring && simpleNameTitle && (schoolLikeCalendar || musicSchoolLocation)) {
-    return true;
-  }
-
-  if (event.isRecurring && simpleNameTitle && !DISTINCTIVE_EVENT_PATTERN.test(combinedText) && !event.location) {
-    return true;
-  }
-
-  return false;
-};
-
-const scoreEventInterest = (event) => {
+const scoreEventInterest = (event, rules) => {
   if (!event) {
     return 0;
   }
@@ -3202,12 +3195,12 @@ const scoreEventInterest = (event) => {
   if (DISTINCTIVE_EVENT_PATTERN.test(combinedText)) score += 22;
   if (TRAVEL_SIGNAL_PATTERN.test(combinedText)) score += 12;
   if ((event.location || '').trim()) score += 6;
-  if (isLowValueRoutineEvent(event)) score -= 32;
+  if (isLowValueRoutineEvent(event, rules)) score -= 32;
 
   return score;
 };
 
-const scoreUpcomingEventRelevance = (event, now = Date.now()) => {
+const scoreUpcomingEventRelevance = (event, now = Date.now(), rules = undefined) => {
   if (!event) {
     return -Infinity;
   }
@@ -3219,7 +3212,7 @@ const scoreUpcomingEventRelevance = (event, now = Date.now()) => {
   }
 
   const hoursAway = Math.max(0, (startMs - now) / 3600000);
-  let score = scoreEventInterest(event);
+  let score = scoreEventInterest(event, rules);
 
   if (hoursAway <= 6) score += 18;
   else if (hoursAway <= 24) score += 14;
@@ -3245,69 +3238,27 @@ const RECURRING_ALWAYS_KEEP_PATTERNS = [
   HOUSEHOLD_EVENT_PATTERNS.delivery,
 ];
 
-const explainBriefEventSelection = (event, config, now = Date.now()) => {
-  const startMs = new Date(event.start).getTime();
-  const endMs = new Date(event.end).getTime();
-  const combinedText = [
-    event.title || '',
-    event.description || '',
-    event.location || '',
-  ].join(' ');
-
-  if (Number.isNaN(startMs) || Number.isNaN(endMs)) {
-    return { include: false, reason: 'invalid_dates' };
-  }
-
-  if (endMs < now) {
-    return { include: false, reason: 'already_finished' };
-  }
-
-  if (!event.isRecurring) {
-    return { include: !isLowValueRoutineEvent(event), reason: isLowValueRoutineEvent(event) ? 'routine_non_recurring' : 'distinct_or_non_recurring' };
-  }
-
-  if (!shouldSuppressRoutineRecurringEvents(config)) {
-    return { include: !isLowValueRoutineEvent(event), reason: isLowValueRoutineEvent(event) ? 'routine_recurring' : 'recurring_allowed_by_setting' };
-  }
-
-  if (event.isAllDay) {
-    return { include: true, reason: 'recurring_all_day' };
-  }
-
-  if (RECURRING_ALWAYS_KEEP_PATTERNS.some((pattern) => pattern.test(combinedText))) {
-    return { include: true, reason: 'recurring_household_reminder' };
-  }
-
-  if (DISTINCTIVE_EVENT_PATTERN.test(combinedText) && !isLowValueRoutineEvent(event)) {
-    return { include: true, reason: 'recurring_distinctive_event' };
-  }
-
-  if (isLowValueRoutineEvent(event)) {
-    return { include: false, reason: 'routine_recurring_suppressed' };
-  }
-
-  return { include: false, reason: 'generic_recurring_suppressed' };
-};
+const explainBriefEventSelection = (event, config, now = Date.now()) => classifyBriefEvent(event, {
+  now,
+  timeZone: config?.system?.timezone || 'UTC',
+  rules: getContextRules(config),
+  suppressRecurring: shouldSuppressRoutineRecurringEvents(config),
+  alwaysKeepPatterns: RECURRING_ALWAYS_KEEP_PATTERNS,
+});
 
 const getRelevantBriefEvents = (events, config, limit = 18) => {
   const now = Date.now();
-  return events
+  const rules = getContextRules(config);
+  const entries = events
     .filter((event) => explainBriefEventSelection(event, config, now).include)
     .map((event) => ({
       event,
-      score: scoreUpcomingEventRelevance(event, now),
+      score: scoreUpcomingEventRelevance(event, now, rules),
       startMs: new Date(event.start).getTime(),
     }))
-    .filter((entry) => entry.score > -Infinity)
-    .sort((left, right) => {
-      if (right.score !== left.score) {
-        return right.score - left.score;
-      }
-      return left.startMs - right.startMs;
-    })
-    .slice(0, limit)
-    .sort((left, right) => left.startMs - right.startMs)
-    .map((entry) => entry.event);
+    .filter((entry) => entry.score > -Infinity);
+
+  return selectEventsByHorizon(entries, { now, timeZone: config?.system?.timezone || 'UTC', limit });
 };
 
 const getEnabledContextSignals = (config) => ({
@@ -3355,7 +3306,7 @@ const filterEventsForDailyBrief = (events, config) => {
     .filter((event) => explainBriefEventSelection(event, config, now).include);
 };
 
-const classifyHouseholdEvent = (event) => {
+const classifyHouseholdEvent = (event, rules) => {
   const combinedText = [
     event.title || '',
     event.description || '',
@@ -3366,7 +3317,7 @@ const classifyHouseholdEvent = (event) => {
     return null;
   }
 
-  if (isLowValueRoutineEvent(event)) {
+  if (isLowValueRoutineEvent(event, rules)) {
     return null;
   }
 
@@ -3437,7 +3388,7 @@ const findIndoorFallbackPlace = (household, excludedPlaceId = '') => {
 const buildHouseholdEventContext = async (events, config, household, routingConfig, routingSecrets, routingCache) => {
   const now = Date.now();
   const candidate = events
-    .map((event) => ({ event, category: classifyHouseholdEvent(event) }))
+    .map((event) => ({ event, category: classifyHouseholdEvent(event, getContextRules(config)) }))
     .filter(({ event, category }) => {
       if (!category) {
         return false;
@@ -3449,7 +3400,7 @@ const buildHouseholdEventContext = async (events, config, household, routingConf
     .map((entry) => {
       const startMs = new Date(entry.event.start).getTime();
       const hoursAway = Math.max(0, (startMs - now) / 3600000);
-      let score = scoreUpcomingEventRelevance(entry.event, now);
+      let score = scoreUpcomingEventRelevance(entry.event, now, getContextRules(config));
 
       if (entry.category.code === 'birthday') score += 18;
       if (entry.category.code === 'anniversary') score += 12;
@@ -4863,7 +4814,7 @@ const buildTripTimelines = async (events, config, household, transportConfig, tr
       return isAnchorEvent
         || mentionsDestination
         || eventHasTravelSignal(event)
-        || (overlapsWindow && sameCalendar && isNearTripBoundary && !isLowValueRoutineEvent(event));
+        || (overlapsWindow && sameCalendar && isNearTripBoundary && !isLowValueRoutineEvent(event, getContextRules(config)));
     });
 
     if (relatedEvents.length > 0) {
@@ -5061,7 +5012,7 @@ const buildHighlightEventContext = (events, config) => {
     })
     .map((event) => ({
       event,
-      score: scoreUpcomingEventRelevance(event, now),
+      score: scoreUpcomingEventRelevance(event, now, getContextRules(config)),
       startMs: new Date(event.start).getTime(),
     }))
     .filter((entry) => entry.score >= 24)
@@ -5219,7 +5170,7 @@ const buildTripCurrentConditionsLabel = (trip) => {
   return `${trip.destination} now: ${weatherLabel}, ${temp}C.`;
 };
 
-const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, travelHeadsUpContext, visitorContext, birthdayContext, commuteContext, householdEventContext, highlightEventContext = null) => {
+const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, travelHeadsUpContext, visitorContext, birthdayContext, commuteContext, householdEventContext, highlightEventContext = null, rules = undefined) => {
   const candidates = [];
 
   if (activeTrip) {
@@ -5515,7 +5466,7 @@ const buildContextCandidates = (events, activeTrip, nextEvent, recentTrip, trave
 	    const startLabel = nextEvent.isAllDay
 	      ? start.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
 	      : start.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-	    const householdView = buildNextEventHouseholdView(nextEvent);
+	    const householdView = buildNextEventHouseholdView(nextEvent, rules);
 	    const nextEventHours = hoursUntil(nextEvent.start);
 	    if (householdView) {
 	      const score = Math.max(30, 54 - Math.max(0, nextEventHours));
@@ -5550,7 +5501,7 @@ const buildHouseholdMessage = (activeTrip, nextEvent, recentTrip, visitorContext
   )[0]?.householdView || ''
 );
 
-const buildNextEventHouseholdView = (event) => {
+const buildNextEventHouseholdView = (event, rules) => {
   if (!event) {
     return '';
   }
@@ -5560,7 +5511,7 @@ const buildNextEventHouseholdView = (event) => {
     return '';
   }
 
-  if (isLowValueRoutineEvent(event)) {
+  if (isLowValueRoutineEvent(event, rules)) {
     return '';
   }
 
@@ -5599,6 +5550,7 @@ const buildDailyBrief = (events, activeTrip, nextEvent, recentTrip, travelHeadsU
     commuteContext,
     householdEventContext,
     highlightEventContext,
+    getContextRules(config),
   );
   const items = buildBriefItems(candidates, 3);
   const primary = items[0] || null;
@@ -5750,7 +5702,6 @@ const LLM_ENRICHMENT_TYPES = new Set([
 const TICKET_SIGNAL_PATTERN = /\b(ticket|tickets|presale|pre-sale|on sale|onsale|vorverkauf)\b/i;
 const CONCERT_SIGNAL_PATTERN = /\b(concert|show|gig|tour|festival|live)\b/i;
 const HOUSEHOLD_PREP_SIGNAL_PATTERN = /\b(setup|prep|preparation|conference|meeting|presentation|overview|delivery|pickup)\b/i;
-const MEDICAL_SIGNAL_PATTERN = /\b(doctor|arzt|ambulanz|clinic|klinik|hospital|krankenhaus|physio|therapy|therapie|infusion|tysabri)\b/i;
 const URL_PATTERN = /https?:\/\/[^\s)]+/gi;
 const TICKET_SELLER_PATTERNS = [
   { label: 'Ticketmaster', pattern: /\bticketmaster\b/i },
@@ -5897,8 +5848,8 @@ const buildSelectionSignals = (event, sourceEvents = [], config = null) => {
     durationHours,
     spanDays,
     isMultiDay: spanDays > 1,
-    isRoutine: isLowValueRoutineEvent(event),
-    isMedical: MEDICAL_SIGNAL_PATTERN.test(combinedText) || eventHintRule?.category === 'medical',
+    isRoutine: isLowValueRoutineEvent(event, getContextRules(config)),
+    isMedical: hasMedicalSignal(event) || eventHintRule?.category === 'medical',
     isOnline: ONLINE_EVENT_PATTERN.test(combinedText),
     missingDetailLevel: [
       !((event.location || '').trim()),
@@ -5949,7 +5900,7 @@ const buildHeuristicLlmSelection = (sourceEvents, config = null) => ({
     const enrichmentType = detectSuggestedEnrichmentType(event);
     const signals = buildSelectionSignals(event, sourceEvents, config);
     const hintEnrichmentType = signals.eventHintRule?.enrichmentType || null;
-    const interesting = !signals.isRoutine && scoreEventInterest(event) >= 18;
+    const interesting = !signals.isRoutine && scoreEventInterest(event, getContextRules(config)) >= 18;
     const clearlyNeedsExtraContext = Boolean(
       hintEnrichmentType
       || enrichmentType === 'travel'
@@ -7546,6 +7497,7 @@ const buildContext = async (calendarCache, config, secrets, household, existingC
     commuteContext,
     householdEventContext,
     highlightEventContext,
+    getContextRules(config),
   );
   const brief = selectContextBrief(deterministicBrief, llm);
 
@@ -8206,6 +8158,50 @@ app.get('/api/calendars', limitExpensive, async (req, res) => {
   }
 });
 
+// "Test this link": fetches one source without saving it and reports what was found.
+// Always answers 200 with { ok } so the UI can show a friendly message instead of a failed request.
+const testCalendarSourceLimiter = createRateLimiter({ windowMs: 60000, max: 12 });
+app.post('/api/calendar-sources/test', rateLimitMiddleware(testCalendarSourceLimiter), async (req, res) => {
+  const incoming = req.body?.source && typeof req.body.source === 'object' ? req.body.source : {};
+  const source = normalizeCalendarSource({ ...incoming, enabled: true }, 0);
+
+  if (!source.url) {
+    return res.json({ ok: false, error: 'Paste a calendar link first.' });
+  }
+
+  try {
+    // An empty password field means "keep the saved one" for an already stored source.
+    const storedSecrets = incoming.id ? (await readSecrets()).calendarSources?.[incoming.id] : null;
+    const typedPassword = typeof incoming.password === 'string' ? incoming.password : '';
+    const password = typedPassword || storedSecrets?.password || '';
+
+    const now = new Date();
+    const timeMin = new Date(now.getTime() - 86400000).toISOString();
+    const timeMax = new Date(now.getTime() + (14 * 86400000)).toISOString();
+    const payload = source.type === 'caldav'
+      ? await fetchCalDavEvents({ source, password, timeMin, timeMax })
+      : await fetchIcsEvents({ source, password, timeMin, timeMax });
+
+    const upcoming = payload.events
+      .filter((event) => new Date(event.end).getTime() >= now.getTime() && !event.declined)
+      .slice(0, 5)
+      .map((event) => ({ title: event.title, start: event.start, isAllDay: event.isAllDay }));
+
+    return res.json({
+      ok: true,
+      name: payload.feedName || payload.calendars?.[0]?.summary || '',
+      eventCount: payload.events.length,
+      calendarCount: payload.calendars.length,
+      upcoming,
+    });
+  } catch (error) {
+    if (error?.expose !== true) {
+      console.error('[calendar-test] failed:', error?.message || error);
+    }
+    return res.json({ ok: false, error: describeFetchError(error) });
+  }
+});
+
 app.get('/api/calendar-sources', async (req, res) => {
   try {
     res.json(await readCalendarSourcesForClient());
@@ -8259,7 +8255,8 @@ app.get('/api/display/calendar/events', async (req, res) => {
       || {};
     res.json({
       syncedAt: cache.syncedAt,
-      events: cache.events.map((event) => ({
+      // Events the owner declined (known from the source's own addresses) are not shown on the mirror either.
+      events: cache.events.filter((event) => !event.declined).map((event) => ({
         ...event,
         calendarColor: calendarOverrides[event.calendarId] || event.calendarColor || '',
       })),

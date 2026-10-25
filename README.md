@@ -20,7 +20,7 @@ Developed by **Christoph Seiler | Flaming Battenberg**.
 - Remote web UI for layout and integration settings
 - Config-driven grid layout for mirror widgets
 - Clock, weather, calendar, Home Assistant, daily brief, and travel time modules
-- Google Calendar, ICS, and CalDAV sync through one backend calendar pipeline
+- Calendar subscriptions (iCal / webcal links) and CalDAV sync through one backend calendar pipeline, with optional direct Google Calendar
 - Household-aware Daily Brief, birthday overlays, and per-member age reveal control
 - Google Calendar OAuth flow handled by the backend for advanced self-hosted setups
 - Runtime cache and account storage outside the repository in `~/.config/mirrorial`
@@ -290,6 +290,22 @@ Mirrorial/
 Mirrorial is open source and released under the [MIT License](./LICENSE).
 
 If you use, modify, or extend it, keep the license terms with the project and review integration credentials carefully before deploying on a public or shared system.
+
+## Connecting calendars
+
+The recommended way is a **calendar subscription link**, which works with any provider and needs no developer account:
+
+1. In your calendar app, copy the iCal / subscription link (Google: "Secret address in iCal format", Apple/Outlook/Nextcloud: the published or shared calendar link). Links starting with `webcal://` work as they are.
+2. In the Remote UI open **Integrations > Calendars**, add an ICS feed, paste the link and press **Test this link**. It shows the calendar name and the next events before you save.
+3. Optional: enter your own e-mail address(es) for that calendar so events you declined are hidden.
+
+CalDAV accounts (Nextcloud, iCloud, Fastmail, ...) are available as well. The direct Google connection is kept as an optional advanced setup.
+
+Treat a subscription link like a password: anyone with it can read the calendar. Mirrorial stores it on the device and shows it in the Remote UI and to the display app (as the event link). It is not part of what is sent to the AI provider, but it is not hidden from anyone who has the access token.
+
+## Controlling what the daily brief mentions
+
+Under **Integrations > LLM Context** you can add words for three lists: always show, never show, and repeating events that count as routine. Matching ignores upper/lower case and accents (`Fußball` finds `fussball`). Schedule changes (Ersatz, entfällt, verschoben, cancelled, moved) and doctor or therapy appointments are always shown, even when they repeat, unless you list a word from them under "never show".
 
 ## Security model
 

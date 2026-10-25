@@ -277,8 +277,8 @@ const CONFIG_TABS = [
 ];
 
 const INTEGRATION_SECTIONS = [
-  { id: 'google', label: 'Google Calendar', eyebrow: 'Account', description: 'OAuth credentials and account connection.' },
-  { id: 'calendar_sources', label: 'Calendar Sources', eyebrow: 'Sources', description: 'ICS feeds, CalDAV accounts, and multi-source sync.' },
+  { id: 'calendar_sources', label: 'Calendars', eyebrow: 'Subscriptions', description: 'Paste the iCal / webcal link of any calendar (Google, Apple, Outlook, Nextcloud, school, sports, ...) or add a CalDAV account.' },
+  { id: 'google', label: 'Google Account (optional)', eyebrow: 'Advanced', description: 'Direct Google connection with OAuth credentials. Most people do not need this, a calendar link works for Google too.' },
   { id: 'weather', label: 'Weather', eyebrow: 'Feed', description: 'Location, provider, and refresh behavior.' },
   { id: 'home_assistant', label: 'Home Assistant', eyebrow: 'Smart Home', description: 'Connection status, activation, entity discovery, and tile configuration.' },
   { id: 'llm', label: 'LLM Context', eyebrow: 'AI', description: 'Provider setup, refresh cadence, and privacy mode.' },
@@ -823,7 +823,8 @@ function App() {
   const [calendarSources, setCalendarSources] = useState([]);
   const [selectedCalendarIds, setSelectedCalendarIds] = useState([]);
   const [calendarSaving, setCalendarSaving] = useState(false);
-  const [activeIntegrationSection, setActiveIntegrationSection] = useState('google');
+  const [activeIntegrationSection, setActiveIntegrationSection] = useState('calendar_sources');
+  const [calendarTests, setCalendarTests] = useState({});
   const [activeLayoutOrientation, setActiveLayoutOrientation] = useState('portrait');
   const [selectedLayoutModuleId, setSelectedLayoutModuleId] = useState(null);
   const [isLayersPanelOpen, setIsLayersPanelOpen] = useState(true);
@@ -2064,8 +2065,22 @@ function App() {
         password: '',
         passwordConfigured: false,
         color: '',
+        ownerEmails: [],
       },
     ]));
+  };
+
+  const testCalendarSource = async (source) => {
+    setCalendarTests((current) => ({ ...current, [source.id]: { loading: true } }));
+    try {
+      const response = await axios.post(`${API_BASE}/calendar-sources/test`, { source });
+      setCalendarTests((current) => ({ ...current, [source.id]: { loading: false, ...response.data } }));
+    } catch (error) {
+      const message = error.response?.status === 429
+        ? 'Too many tests in a short time. Wait a minute and try again.'
+        : 'The test could not be run. Is the Mirrorial backend reachable?';
+      setCalendarTests((current) => ({ ...current, [source.id]: { loading: false, ok: false, error: message } }));
+    }
   };
 
   const updateCalendarSource = (sourceId, changes) => {
@@ -3685,9 +3700,56 @@ function App() {
                                 value={source.url || ''}
                                 onChange={(event) => updateCalendarSource(source.id, { url: event.target.value })}
                                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                                placeholder={source.type === 'caldav' ? 'https://calendar.example.com/dav/' : 'https://example.com/calendar.ics'}
+                                placeholder={source.type === 'caldav' ? 'https://calendar.example.com/dav/' : 'https://example.com/calendar.ics or webcal://...'}
                               />
+                              {source.type !== 'caldav' && (
+                                <div className="mt-2 text-xs text-slate-500">
+                                  Paste the iCal / subscription link of the calendar. Links starting with webcal:// work too. In Google Calendar this is the "Secret address in iCal format", in Apple Calendar and Outlook the public or published calendar link.
+                                </div>
+                              )}
                             </div>
+
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Your e-mail addresses in this calendar (optional)</label>
+                              <input
+                                type="text"
+                                value={Array.isArray(source.ownerEmails) ? source.ownerEmails.join(', ') : (source.ownerEmails || '')}
+                                onChange={(event) => updateCalendarSource(source.id, { ownerEmails: event.target.value })}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                placeholder="anna@example.com, anna@work.example"
+                              />
+                              <div className="mt-2 text-xs text-slate-500">Events you declined are hidden when your address is listed here. Leave empty to show everything.</div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-3">
+                              <button
+                                type="button"
+                                onClick={() => testCalendarSource(source)}
+                                disabled={!source.url || calendarTests[source.id]?.loading}
+                                className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50"
+                              >
+                                {calendarTests[source.id]?.loading ? 'Testing…' : 'Test this link'}
+                              </button>
+                              {calendarTests[source.id] && !calendarTests[source.id].loading && (
+                                calendarTests[source.id].ok ? (
+                                  <div className="text-xs text-emerald-300">
+                                    Works{calendarTests[source.id].name ? `: "${calendarTests[source.id].name}"` : ''}, {calendarTests[source.id].eventCount} events in the next two weeks.
+                                  </div>
+                                ) : (
+                                  <div className="text-xs text-amber-300">{calendarTests[source.id].error}</div>
+                                )
+                              )}
+                            </div>
+                            {calendarTests[source.id]?.ok && (calendarTests[source.id].upcoming || []).length > 0 && (
+                              <ul className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-400 space-y-1">
+                                {calendarTests[source.id].upcoming.map((entry, entryIndex) => (
+                                  <li key={`${source.id}-upcoming-${entryIndex}`}>
+                                    <span className="text-slate-500">{entry.isAllDay ? `${entry.start} ` : `${new Date(entry.start).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} `}</span>
+                                    {entry.title}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
 
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                               <div>
@@ -4032,6 +4094,35 @@ function App() {
                               onChange={(event) => updateServiceConfig('context', 'suppressRoutineRecurringEvents', event.target.checked)}
                             />
                           </label>
+                          {[
+                            { key: 'alwaysShow', label: 'Always show events containing', hint: 'Never hidden, even when they repeat. One word or name per line, e.g. a child\'s name or "Zahnarzt".', placeholder: 'Lena\nZahnarzt' },
+                            { key: 'neverShow', label: 'Never show events containing', hint: 'Always hidden from the brief, e.g. "Spam" or a calendar you do not care about.', placeholder: 'Fußball Training' },
+                            { key: 'routineHints', label: 'Repeating events that count as routine', hint: 'Only affects events that repeat (lessons, shifts, classes). They are left out unless something changes.', placeholder: 'Yoga\nChoir' },
+                          ].map((rule) => (
+                            <div key={rule.key} className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">{rule.label}</label>
+                              <textarea
+                                rows={2}
+                                value={(contextConfig.rules?.[rule.key] || []).join('\n')}
+                                onChange={(event) => updateConfig((draft) => {
+                                  draft.services.context.rules = {
+                                    alwaysShow: [],
+                                    neverShow: [],
+                                    routineHints: [],
+                                    ...(draft.services.context.rules || {}),
+                                    [rule.key]: event.target.value.split('\n'),
+                                  };
+                                  return draft;
+                                })}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                                placeholder={rule.placeholder}
+                              />
+                              <div className="text-xs text-slate-500 mt-2">{rule.hint}</div>
+                            </div>
+                          ))}
+                          <div className="text-xs text-slate-500">
+                            Changes to the schedule ("Ersatz", "entfällt", "verschoben", "cancelled", "moved") and doctor or therapy appointments are always shown, even when they repeat. The only way to hide them is to list a word from them under "Never show".
+                          </div>
                         </div>
 
                         <div>
