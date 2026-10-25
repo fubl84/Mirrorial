@@ -291,6 +291,19 @@ Mirrorial is open source and released under the [MIT License](./LICENSE).
 
 If you use, modify, or extend it, keep the license terms with the project and review integration credentials carefully before deploying on a public or shared system.
 
+## Security model
+
+The backend API is protected by an access token.
+
+- **Where the token is.** On first start the backend creates `~/.config/mirrorial/access-token` (mode 600) and prints it in the log. You can also set your own with the `MIRRORIAL_ACCESS_TOKEN` environment variable (at least 16 characters).
+- **Remote UI.** Open the remote UI from another device and it asks for the token. It is kept in that browser's local storage.
+- **The mirror itself.** Requests from the same machine (the Flutter display on `127.0.0.1`) work without a token. They are only trusted when there is no proxy header and neither `Host` nor `Origin` is a DNS name. Set `MIRRORIAL_TRUST_LOCAL=false` to disable this.
+- **Reverse proxy.** A proxy on the same machine is never treated as local, because it adds `X-Forwarded-*` headers, so clients behind it always need the token. If the remote UI is served from a hostname, list it in `MIRRORIAL_ALLOWED_ORIGINS` (comma separated) so the browser may call the API.
+- **Lost token.** Read the file on the Pi, or delete it and restart the backend to generate a new one.
+- **Stored keys.** An API key (LLM, routing) is only sent to the endpoint it was entered for. If you change the provider or base URL, enter the key again. The Home Assistant token is never sent to the browser. The UI shows only whether one is stored.
+- **Outbound URLs.** LLM, Home Assistant and calendar URLs must be `http(s)`, may not contain credentials, and may not point to link-local/cloud-metadata addresses.
+
+
 ## Developer
 
 Mirrorial is developed by **Christoph Seiler | Flaming Battenberg**.

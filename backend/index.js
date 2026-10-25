@@ -9,6 +9,29 @@ const morgan = require('morgan');
 const { exec } = require('child_process');
 const { OAuth2Client } = require('google-auth-library');
 const axios = require('axios');
+const {
+  PublicError,
+  assertSafeOutboundUrl,
+  buildCorsOptions,
+  createAuthMiddleware,
+  createExpiringStore,
+  createRateLimiter,
+  getLlmEndpoint,
+  getUrlOrigin,
+  getRoutingEndpoint,
+  bindSecretsToEndpoints,
+  loadOrCreateAccessToken,
+  rateLimitMiddleware,
+  safeDetails,
+  sameUrlOrigin,
+  securityHeaders,
+  shouldDropStoredSecret,
+} = require('./src/security');
+const {
+  extractHomeAssistantToken,
+  restoreHomeAssistantToken,
+  stripHomeAssistantToken,
+} = require('./src/security/haToken');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,7 +54,16 @@ const CALENDAR_SCOPES = [
   'https://www.googleapis.com/auth/calendar.readonly',
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
 ];
-const GOOGLE_AUTH_STATES = new Map();
+const GOOGLE_AUTH_STATES = createExpiringStore({ ttlMs: 10 * 60000 });
+const GOOGLE_AUTH_TICKETS = createExpiringStore({ ttlMs: 60000 });
+const ALLOWED_ORIGINS = (process.env.MIRRORIAL_ALLOWED_ORIGINS || '').split(',').map((entry) => entry.trim()).filter(Boolean);
+let accessToken = null;
+const getAccessToken = () => {
+  if (!accessToken) {
+    accessToken = loadOrCreateAccessToken({ dataRoot: DATA_ROOT });
+  }
+  return accessToken;
+};
 const LOCAL_HOST_PATTERNS = ['localhost', '127.0.0.1', '::1'];
 const SHARED_MODULE_TYPES = new Set(['clock', 'weather', 'home_assistant', 'calendar', 'daily_brief', 'travel_time']);
 const DEFAULT_CONTEXT_REFRESH_MINUTES = 180;
@@ -251,10 +283,39 @@ const DEFAULT_CALENDAR_SOURCE_STORE = {
   sources: [],
 };
 
-app.use(cors());
+// Only deliberate, user-facing errors keep their status. Upstream errors (axios etc.) always become 500,
+// so e.g. a provider's 401 is never mistaken for a failed Mirrorial login.
+const statusFor = (error) => (error?.expose === true && Number.isInteger(error.status) ? error.status : 500);
+
+const PUBLIC_API_PATHS = [
+  '/auth/google/callback', // protected by the one-time OAuth `state`
+  '/auth/google/start', // protected by a one-time ticket issued by the authenticated /auth/google/init
+  '/security/status', // lets the remote UI decide whether to show the login screen
+];
+const expensiveLimiter = createRateLimiter({ windowMs: 60000, max: 60 });
+const systemCommandLimiter = createRateLimiter({ windowMs: 60000, max: 5 });
+const limitExpensive = rateLimitMiddleware(expensiveLimiter);
+const limitSystemCommands = rateLimitMiddleware(systemCommandLimiter);
+
+app.disable('x-powered-by');
+app.use(securityHeaders);
+app.use(cors(buildCorsOptions({ extraOrigins: ALLOWED_ORIGINS })));
 app.use(morgan('dev'));
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '2mb' }));
+app.use('/api', createAuthMiddleware({
+  getToken: getAccessToken,
+  publicPaths: PUBLIC_API_PATHS,
+  trustLocal: process.env.MIRRORIAL_TRUST_LOCAL !== 'false',
+}));
 app.use(express.static(PUBLIC_UI_PATH));
+
+app.get('/api/security/status', (req, res) => {
+  res.json({
+    authenticated: Boolean(req.auth?.authenticated),
+    method: req.auth?.method || null,
+    authRequired: !req.auth?.authenticated,
+  });
+});
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
@@ -470,11 +531,17 @@ const assertOptionalHttpUrl = (value, label) => {
   try {
     parsedUrl = new URL(normalizedValue);
   } catch (error) {
-    throw new Error(`${label} must be a full http:// or https:// URL, or empty.`);
+    throw new PublicError(`${label} must be a full http:// or https:// URL, or empty.`);
   }
 
   if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-    throw new Error(`${label} must use http:// or https://.`);
+    throw new PublicError(`${label} must use http:// or https://.`);
+  }
+
+  try {
+    assertSafeOutboundUrl(normalizedValue, label);
+  } catch (error) {
+    throw new PublicError(error.message);
   }
 };
 
@@ -492,8 +559,16 @@ const fetchHomeAssistantEntities = async ({ url, token }) => {
     throw new Error('HA URL and token must be provided.');
   }
 
+  try {
+    assertSafeOutboundUrl(normalizedUrl, 'Home Assistant URL');
+  } catch (error) {
+    throw new PublicError(error.message);
+  }
+
   const response = await axios.get(`${normalizedUrl}/api/states`, {
     headers: { Authorization: `Bearer ${normalizedToken}` },
+    timeout: 10000,
+    maxRedirects: 0,
   });
 
   return response.data
@@ -964,6 +1039,7 @@ const sanitizeConfigForClient = (config, secrets) => {
   safeConfig.services.travel.routingApiKeyConfigured = Boolean(secrets.routing?.apiKey);
   safeConfig.services.travel.googleRoutesApiKey = '';
   safeConfig.services.travel.googleRoutesApiKeyConfigured = Boolean(secrets.routing?.googleRoutesApiKey);
+  stripHomeAssistantToken(safeConfig);
   return safeConfig;
 };
 
@@ -1042,10 +1118,15 @@ const extractSecretsFromConfig = (config, currentSecrets) => {
 };
 
 const saveConfig = async (rawConfig) => {
-  const currentSecrets = await readSecrets();
-  const { config, secrets } = extractSecretsFromConfig(validateConfigForSave(normalizeConfig(rawConfig)), currentSecrets);
+  const [storedSecrets, previousConfig] = await Promise.all([readSecrets(), readConfig()]);
+  const nextConfig = validateConfigForSave(normalizeConfig(rawConfig));
+  // Stored keys/tokens only stay valid for the endpoint they were entered for.
+  const currentSecrets = bindSecretsToEndpoints({ previousConfig, nextConfig, secrets: storedSecrets });
+  restoreHomeAssistantToken(nextConfig, previousConfig, sameUrlOrigin);
+  const { config, secrets } = extractSecretsFromConfig(nextConfig, currentSecrets);
   await writeSecrets(secrets);
-  await fs.writeJson(CONFIG_PATH, config, { spaces: 2 });
+  await fs.writeJson(CONFIG_PATH, config, { spaces: 2, mode: 0o600 });
+  await fs.chmod(CONFIG_PATH, 0o600).catch(() => {});
   return sanitizeConfigForClient(config, secrets);
 };
 
@@ -1107,6 +1188,17 @@ const saveCalendarSources = async (rawSources) => {
   const currentSecrets = await readSecrets();
   const sourceList = Array.isArray(rawSources?.sources) ? rawSources.sources : [];
   const normalizedSources = sourceList.map((source, index) => normalizeCalendarSource(source, index));
+  // Validate on save only; reading stored sources must never throw and block the sync loop.
+  normalizedSources.forEach((source) => {
+    if (!source.url) {
+      return;
+    }
+    try {
+      assertSafeOutboundUrl(source.url.replace(/^webcal:\/\//i, 'https://'), `Calendar URL "${source.name || source.url}"`);
+    } catch (error) {
+      throw new PublicError(error.message);
+    }
+  });
   const nextSecrets = clone(currentSecrets);
   nextSecrets.calendarSources = nextSecrets.calendarSources || {};
 
@@ -6903,6 +6995,7 @@ const validateLlmBrief = (payload) => {
 };
 
 const callOpenAiCompatible = async ({ baseUrl, apiKey, model, prompt }) => {
+  assertSafeOutboundUrl(baseUrl, 'LLM Base URL');
   const response = await axios.post(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
     model,
     messages: [
@@ -7006,9 +7099,9 @@ const buildGoogleGenerateContentPayload = (prompt, responseSchema) => {
 
 const callGoogleGenerativeAi = async ({ apiKey, model, prompt, responseSchema = GOOGLE_BRIEF_RESPONSE_SCHEMA }) => {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  // The key travels in a header, not in the query string, so it cannot end up in logs or error messages.
   const requestConfig = {
-    params: { key: apiKey },
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
     timeout: 20000,
   };
 
@@ -7713,7 +7806,20 @@ const loadContextCache = async () => readRuntimeJsonIfExists(CONTEXT_CACHE_PATH,
   brief: { headline: 'Daily brief', bullets: [] },
 });
 
-const buildAuthPopupHtml = ({ success, payload }) => `
+const escapeHtml = (value) => `${value ?? ''}`
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+// JSON that is safe inside an inline <script>: "<" can never close the tag, U+2028/2029 cannot break the literal.
+const serializeForInlineScript = (value) => JSON.stringify(value)
+  .replace(/</g, '\\u003c')
+  .replace(/\u2028/g, '\\u2028')
+  .replace(/\u2029/g, '\\u2029');
+
+const buildAuthPopupHtml = ({ success, payload, targetOrigin = '' }) => `
 <!doctype html>
 <html lang="en">
   <head>
@@ -7729,17 +7835,19 @@ const buildAuthPopupHtml = ({ success, payload }) => `
   <body>
     <div class="card">
       <h1>${success ? 'Google account connected' : 'Google connection failed'}</h1>
-      <p>${success ? 'You can close this window now.' : payload.error}</p>
+      <p>${success ? 'You can close this window now.' : escapeHtml(payload?.error)}</p>
     </div>
     <script>
-      if (window.opener) {
-        window.opener.postMessage(${JSON.stringify({
+      // Only report back to the origin that started the flow. Without a known origin nothing is posted.
+      var targetOrigin = ${serializeForInlineScript(targetOrigin || '')};
+      if (window.opener && targetOrigin) {
+        window.opener.postMessage(${serializeForInlineScript({
           type: 'mirrorial-google-auth',
           success,
           payload,
-        })}, '*');
+        })}, targetOrigin);
       }
-      window.setTimeout(() => window.close(), 350);
+      window.setTimeout(function () { window.close(); }, 350);
     </script>
   </body>
 </html>`;
@@ -7824,7 +7932,7 @@ app.get('/api/config', async (req, res) => {
     const [config, secrets] = await Promise.all([readConfig(), readSecrets()]);
     res.json(sanitizeConfigForClient(config, secrets));
   } catch (error) {
-    res.status(500).json({ error: 'Failed to read config', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to read config', details: safeDetails(error) });
   }
 });
 
@@ -7833,7 +7941,7 @@ app.post('/api/config', async (req, res) => {
     const publicConfig = await saveConfig(req.body);
     res.json({ success: true, config: publicConfig });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to save config', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to save config', details: safeDetails(error) });
   }
 });
 
@@ -7842,7 +7950,7 @@ app.get('/api/household', async (req, res) => {
     const household = await readHousehold();
     res.json(household);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to read household settings', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to read household settings', details: safeDetails(error) });
   }
 });
 
@@ -7861,7 +7969,7 @@ app.post('/api/household', async (req, res) => {
 
     res.json({ success: true, household });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to save household settings', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to save household settings', details: safeDetails(error) });
   }
 });
 
@@ -7869,11 +7977,11 @@ app.get('/api/system/capabilities', async (req, res) => {
   try {
     res.json(await detectSystemCapabilities());
   } catch (error) {
-    res.status(500).json({ error: 'Failed to detect system capabilities', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to detect system capabilities', details: safeDetails(error) });
   }
 });
 
-app.post('/api/system/:command', async (req, res) => {
+app.post('/api/system/:command', limitSystemCommands, async (req, res) => {
   const { command } = req.params;
   const capabilities = await detectSystemCapabilities();
   let shellCmd = '';
@@ -7903,17 +8011,42 @@ app.post('/api/system/:command', async (req, res) => {
 
   exec(shellCmd, (error) => {
     if (error) {
-      return res.status(500).json({ error: 'Command execution failed', details: error.message });
+      return res.status(statusFor(error)).json({ error: 'Command execution failed', details: safeDetails(error) });
     }
     return res.json({ success: true, message: `Command ${command} triggered` });
   });
 });
 
+// Authenticated step: a browser popup cannot send an Authorization header, so the remote UI first asks
+// for a one-time ticket (valid 60 s) and opens the popup with it. The access token never appears in a URL.
+const resolveRequestOrigin = (req) => {
+  const headerOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
+  return getUrlOrigin(headerOrigin) || `${req.protocol}://${req.get('host')}`;
+};
+
+app.post('/api/auth/google/init', (req, res) => {
+  // The popup reports back to the origin that started the flow, never to '*'.
+  const ticket = GOOGLE_AUTH_TICKETS.issue({ origin: resolveRequestOrigin(req) });
+  res.json({ ticket, startPath: `/api/auth/google/start?ticket=${ticket}` });
+});
+
 app.get('/api/auth/google/start', async (req, res) => {
+  let popupOrigin = '';
   try {
+    const ticket = typeof req.query.ticket === 'string' ? req.query.ticket : '';
+    const ticketData = GOOGLE_AUTH_TICKETS.take(ticket);
+    if (!req.auth?.authenticated && !ticketData) {
+      return res.status(401).send(buildAuthPopupHtml({
+        success: false,
+        payload: { error: 'This sign-in link expired. Start the Google connection again from the Mirrorial remote UI.' },
+      }));
+    }
+    popupOrigin = ticketData?.origin || resolveRequestOrigin(req);
+
     const { settings } = await getGoogleSettings(req);
     if (!settings.clientId || !settings.clientSecret || !settings.redirectUri) {
       return res.status(400).send(buildAuthPopupHtml({
+        targetOrigin: popupOrigin,
         success: false,
         payload: {
           error: 'Google OAuth is not configured yet. Save client ID, client secret, and redirect URI first.',
@@ -7921,8 +8054,7 @@ app.get('/api/auth/google/start', async (req, res) => {
       }));
     }
 
-    const state = crypto.randomBytes(24).toString('hex');
-    GOOGLE_AUTH_STATES.set(state, Date.now());
+    const state = GOOGLE_AUTH_STATES.issue({ origin: popupOrigin });
 
     const client = createGoogleClient(settings);
     const url = client.generateAuthUrl({
@@ -7935,23 +8067,27 @@ app.get('/api/auth/google/start', async (req, res) => {
     return res.redirect(url);
   } catch (error) {
     return res.status(500).send(buildAuthPopupHtml({
+      targetOrigin: popupOrigin,
       success: false,
-      payload: { error: error.message },
+      payload: { error: safeDetails(error) },
     }));
   }
 });
 
 app.get('/api/auth/google/callback', async (req, res) => {
+  let popupOrigin = '';
   try {
     const { code, state } = req.query;
-    if (!code || !state || !GOOGLE_AUTH_STATES.has(state)) {
+    // `take` makes the state single-use and enforces the 10 minute expiry.
+    const stateData = typeof state === 'string' ? GOOGLE_AUTH_STATES.take(state) : null;
+    if (!code || !stateData) {
       return res.status(400).send(buildAuthPopupHtml({
+        targetOrigin: popupOrigin,
         success: false,
-        payload: { error: 'Google auth callback is missing a valid state or code.' },
+        payload: { error: 'Google auth callback is missing a valid state or code. Start the connection again.' },
       }));
     }
-
-    GOOGLE_AUTH_STATES.delete(state);
+    popupOrigin = stateData.origin || '';
     const { settings } = await getGoogleSettings(req);
     const client = createGoogleClient(settings);
     const tokenResponse = await client.getToken(code);
@@ -7984,11 +8120,13 @@ app.get('/api/auth/google/callback', async (req, res) => {
     }
 
     return res.send(buildAuthPopupHtml({
+      targetOrigin: popupOrigin,
       success: true,
       payload: { email },
     }));
   } catch (error) {
     return res.status(500).send(buildAuthPopupHtml({
+      targetOrigin: popupOrigin,
       success: false,
       payload: { error: formatGoogleAuthError(error) },
     }));
@@ -8016,7 +8154,7 @@ app.get('/api/auth/google/status', async (req, res) => {
       statusReason: tokenStatus.statusReason,
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to read Google auth status', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to read Google auth status', details: safeDetails(error) });
   }
 });
 
@@ -8026,7 +8164,7 @@ app.post('/api/auth/google/disconnect', async (req, res) => {
     await syncCalendarData({ forceContext: true });
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to disconnect Google account', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to disconnect Google account', details: safeDetails(error) });
   }
 });
 
@@ -8050,11 +8188,11 @@ app.get('/api/google/calendars', async (req, res) => {
       lastSyncedAt: cache.syncedAt,
     });
   } catch (error) {
-    return res.status(500).json({ error: 'Failed to fetch calendars', details: error.message });
+    return res.status(statusFor(error)).json({ error: 'Failed to fetch calendars', details: safeDetails(error) });
   }
 });
 
-app.get('/api/calendars', async (req, res) => {
+app.get('/api/calendars', limitExpensive, async (req, res) => {
   try {
     const cache = await syncCalendarData();
     res.json({
@@ -8064,7 +8202,7 @@ app.get('/api/calendars', async (req, res) => {
       lastSyncedAt: cache?.syncedAt || null,
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch calendars', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to fetch calendars', details: safeDetails(error) });
   }
 });
 
@@ -8072,7 +8210,7 @@ app.get('/api/calendar-sources', async (req, res) => {
   try {
     res.json(await readCalendarSourcesForClient());
   } catch (error) {
-    res.status(500).json({ error: 'Failed to read calendar sources', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to read calendar sources', details: safeDetails(error) });
   }
 });
 
@@ -8087,7 +8225,7 @@ app.post('/api/calendar-sources', async (req, res) => {
       lastSyncedAt: cache?.syncedAt || null,
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to save calendar sources', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to save calendar sources', details: safeDetails(error) });
   }
 });
 
@@ -8108,7 +8246,7 @@ app.post('/api/google/calendars/select', async (req, res) => {
       selectedCalendarIds: cache?.selectedCalendarIds || [],
     });
   } catch (error) {
-    return res.status(500).json({ error: 'Failed to save calendar selection', details: error.message });
+    return res.status(statusFor(error)).json({ error: 'Failed to save calendar selection', details: safeDetails(error) });
   }
 });
 
@@ -8127,11 +8265,11 @@ app.get('/api/display/calendar/events', async (req, res) => {
       })),
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to read calendar cache', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to read calendar cache', details: safeDetails(error) });
   }
 });
 
-app.post('/api/display/travel-time', async (req, res) => {
+app.post('/api/display/travel-time', limitExpensive, async (req, res) => {
   try {
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     const travelSnapshot = await computeTravelTimeItems({ items });
@@ -8140,7 +8278,7 @@ app.post('/api/display/travel-time', async (req, res) => {
       items: travelSnapshot.items,
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to build travel time items', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to build travel time items', details: safeDetails(error) });
   }
 });
 
@@ -8150,7 +8288,7 @@ app.get('/api/display/context', async (req, res) => {
     const locale = req.query.locale?.toString() || config.system?.displayLocale || 'en';
     res.json(localizeContextPayload(context, locale));
   } catch (error) {
-    res.status(500).json({ error: 'Failed to read context cache', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to read context cache', details: safeDetails(error) });
   }
 });
 
@@ -8159,7 +8297,7 @@ app.get('/api/debug/daily-brief', async (req, res) => {
     const debug = await readDailyBriefDebug();
     res.json(debug);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to read Daily Brief debug log', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to read Daily Brief debug log', details: safeDetails(error) });
   }
 });
 
@@ -8168,18 +8306,18 @@ app.get('/api/debug/travel-time', async (req, res) => {
     const debug = await readTravelTimeDebug();
     res.json(debug);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to read Travel Time debug log', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to read Travel Time debug log', details: safeDetails(error) });
   }
 });
 
-app.post('/api/debug/daily-brief/rebuild', async (req, res) => {
+app.post('/api/debug/daily-brief/rebuild', limitExpensive, async (req, res) => {
   try {
     await syncGoogleCalendarData({ forceContext: true });
 
     const debug = await readDailyBriefDebug();
     res.json({ success: true, debug });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to rebuild Daily Brief debug log', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to rebuild Daily Brief debug log', details: safeDetails(error) });
   }
 });
 
@@ -8188,7 +8326,7 @@ app.get('/api/display/status', async (req, res) => {
     const status = await readDisplayStatus();
     res.json(status);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to read display status', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to read display status', details: safeDetails(error) });
   }
 });
 
@@ -8210,7 +8348,7 @@ app.post('/api/display/status', async (req, res) => {
     await writeDisplayStatus(status);
     return res.json({ success: true, status });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to persist display status', details: error.message });
+    res.status(statusFor(error)).json({ error: 'Failed to persist display status', details: safeDetails(error) });
   }
 });
 
@@ -8229,14 +8367,22 @@ app.get('/api/ha/entities', async (req, res) => {
     const entities = await fetchHomeAssistantEntities(ha);
     return res.json({ entities });
   } catch (error) {
-    return res.status(500).json({ error: 'Failed to fetch entities', details: error.message });
+    return res.status(statusFor(error)).json({ error: 'Failed to fetch entities', details: safeDetails(error) });
   }
 });
 
-app.post('/api/ha/entities/discover', async (req, res) => {
+app.post('/api/ha/entities/discover', limitExpensive, async (req, res) => {
   try {
     const url = typeof req.body?.url === 'string' ? req.body.url : '';
-    const token = typeof req.body?.token === 'string' ? req.body.token : '';
+    let token = typeof req.body?.token === 'string' ? req.body.token : '';
+
+    if (!token.trim() && url.trim()) {
+      // The token is never sent to the browser. Re-use the stored one, but only for the URL it was saved with.
+      const stored = extractHomeAssistantToken(await readConfig());
+      if (stored.token && sameUrlOrigin(stored.url, url)) {
+        token = stored.token;
+      }
+    }
 
     if (!url.trim() || !token.trim()) {
       return res.status(400).json({ error: 'Home Assistant URL and token are required.' });
@@ -8245,7 +8391,7 @@ app.post('/api/ha/entities/discover', async (req, res) => {
     const entities = await fetchHomeAssistantEntities({ url, token });
     return res.json({ entities });
   } catch (error) {
-    return res.status(500).json({ error: 'Failed to fetch entities', details: error.message });
+    return res.status(statusFor(error)).json({ error: 'Failed to fetch entities', details: safeDetails(error) });
   }
 });
 
@@ -8257,6 +8403,9 @@ if (require.main === module) {
   app.listen(PORT, async () => {
     await ensureRuntimePaths();
     await ensureConfig();
+    // Create (and log, on first run) the remote access token at startup so the owner can find it.
+    getAccessToken();
+    console.log(`Remote access token file: ${path.join(DATA_ROOT, 'access-token')}`);
     startPowerManager();
     startCalendarSyncLoop();
     console.log(`Mirrorial backend running on port ${PORT}`);

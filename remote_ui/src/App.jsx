@@ -30,7 +30,8 @@ import {
 } from 'lucide-react';
 import MirrorPreview from './components/MirrorPreview';
 
-const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:3000/api' : '/api';
+import { API_BASE, getBackendOrigin } from './api';
+
 const APP_VERSION = '1.0';
 const FONT_PREVIEW_STYLESHEETS = {
   Roboto: 'https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap',
@@ -1154,7 +1155,7 @@ function App() {
       config?.moduleSettings?.home_assistant || {},
     );
 
-    if (!homeAssistantModuleConfig.url || !homeAssistantModuleConfig.token) {
+    if (!homeAssistantModuleConfig.url || (!homeAssistantModuleConfig.token && !homeAssistantModuleConfig.tokenConfigured)) {
       setHaEntities([]);
       setHaEntitiesError('Enter a Home Assistant URL and long-lived token to browse entities.');
       return;
@@ -1993,14 +1994,24 @@ function App() {
   };
 
   const connectGoogle = () => {
-    const popup = window.open(`${API_BASE}/auth/google/start`, 'mirrorial-google-auth', 'popup=yes,width=540,height=720');
+    // Open the popup synchronously (browsers block async popups), then point it at the one-time start URL.
+    const popup = window.open('about:blank', 'mirrorial-google-auth', 'popup=yes,width=540,height=720');
     if (!popup) {
       showErrorDialog('Popup blocked', 'The browser blocked the Google OAuth popup. Allow popups for this console and try again.');
       return;
     }
 
+    axios.post(`${API_BASE}/auth/google/init`)
+      .then((response) => {
+        popup.location.href = `${getBackendOrigin()}${response.data.startPath}`;
+      })
+      .catch(() => {
+        popup.close();
+        showErrorDialog('Google authentication failed', 'The backend did not accept the sign-in request. Reload the page and try again.');
+      });
+
     const onMessage = (event) => {
-      if (!event.data || event.data.type !== 'mirrorial-google-auth') {
+      if (event.origin !== getBackendOrigin() || !event.data || event.data.type !== 'mirrorial-google-auth') {
         return;
       }
 
@@ -4997,6 +5008,8 @@ function App() {
                           <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Home Assistant Token</label>
                           <input
                             type="password"
+                            autoComplete="new-password"
+                            placeholder={homeAssistantConfig.tokenConfigured ? 'Stored on the mirror. Enter to replace.' : 'Paste long-lived access token'}
                             value={homeAssistantConfig.token || ''}
                             onChange={(event) => updateModuleConfig('home_assistant', 'token', event.target.value)}
                             className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
