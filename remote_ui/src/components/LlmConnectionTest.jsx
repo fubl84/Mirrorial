@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import axios from 'axios';
 import { API_BASE } from '../api';
 import { FIELD_CLASS, LABEL_CLASS } from './llmStyles';

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const LEGACY_LAYOUT_REFERENCE = {
@@ -48,7 +48,9 @@ const resolveRotatorPreviewState = (module, now) => {
   };
 };
 
-const MirrorPreview = ({
+// The hooks live in the inner component. With `if (!config) return null` in front of them, React saw a different
+// number of hooks as soon as `config` arrived, which is a crash waiting to happen.
+const MirrorPreviewInner = ({
   config,
   gridLayout,
   orientation = "portrait",
@@ -60,8 +62,6 @@ const MirrorPreview = ({
   onMoveModule,
   onResizeModule,
 }) => {
-  if (!config) return null;
-
   const { theme } = config;
   const containerRef = useRef(null);
   const dragStateRef = useRef(null);
@@ -1232,5 +1232,7 @@ const ModulePreview = ({
       return null;
   }
 };
+
+const MirrorPreview = (props) => (props.config ? <MirrorPreviewInner {...props} /> : null);
 
 export default MirrorPreview;

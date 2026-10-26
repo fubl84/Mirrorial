@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import axios from 'axios';
 import {
   Activity,
@@ -9,7 +9,6 @@ import {
   Cloud,
   Droplets,
   Fan,
-  GripVertical,
   Home,
   Info,
   Layout,
@@ -3655,10 +3654,10 @@ function App() {
 
                         {calendarSources.map((source, index) => (
                           <div key={source.id} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 space-y-4">
-	                            <div className="flex items-center justify-between gap-4">
-	                              <div>
-	                                <div className="text-white font-semibold">{source.type === 'caldav' ? 'CalDAV account' : 'ICS feed'} #{index + 1}</div>
-	                                <div className="text-xs text-slate-500">Credentials are stored securely on the mirror.</div>
+                              <div className="flex items-center justify-between gap-4">
+                                <div>
+                                  <div className="text-white font-semibold">{source.type === 'caldav' ? 'CalDAV account' : 'ICS feed'} #{index + 1}</div>
+                                  <div className="text-xs text-slate-500">Credentials are stored securely on the mirror.</div>
                                   {source.syncStatus && (
                                     <div className={source.syncStatus === 'error' ? 'mt-2 text-xs text-amber-300' : 'mt-2 text-xs text-emerald-300'}>
                                       {source.syncStatus === 'error'
@@ -3666,9 +3665,9 @@ function App() {
                                         : `Last sync ready${source.syncEventCount !== null && source.syncEventCount !== undefined ? `, ${source.syncEventCount} events` : ''}.`}
                                     </div>
                                   )}
-	                              </div>
-	                              <button onClick={() => removeCalendarSource(source.id)} className="text-slate-500 hover:text-red-400 transition-colors">
-	                                <Trash2 size={18} />
+                                </div>
+                                <button onClick={() => removeCalendarSource(source.id)} className="text-slate-500 hover:text-red-400 transition-colors">
+                                  <Trash2 size={18} />
                               </button>
                             </div>
 

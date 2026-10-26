@@ -259,10 +259,14 @@ cd backend
 npm test
 ```
 
-### Remote UI production build
+Includes HTTP-level tests that start the real app on a random port. They use their own temporary data directory and config
+file (`MIRRORIAL_DATA_DIR`, `MIRRORIAL_CONFIG_PATH`), so they never touch your `config.json` or `~/.config/mirrorial`.
+
+### Remote UI lint and production build
 
 ```bash
 cd remote_ui
+npm run lint    # errors fail, warnings are listed
 npm run build
 ```
 
@@ -270,7 +274,13 @@ npm run build
 
 ```bash
 ./scripts/check_display.sh
+# or, from display_app/:  flutter analyze && flutter test
 ```
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs all of the above on every push to `main`, `master` and `improvement/**` branches and on pull
+requests. `npm audit` is reported but does not fail the build.
 
 ## Project structure
 
