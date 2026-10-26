@@ -40,6 +40,13 @@ const { pickWindowEvents } = require('./src/brief/dossier');
 const { checkLlmPreconditions } = require('./src/brief/gate');
 const { getBriefFocus } = require('./src/brief/dossier');
 const { buildLlmResult, buildSkippedResult } = require('./src/brief/result');
+const { COMPOSER_JSON_SCHEMA } = require('./src/brief/composer');
+const {
+  describeLlmError,
+  generateJson,
+  getLlmProviderInfo,
+  testConnection,
+} = require('./src/llm');
 const {
   MAX_ICS_BYTES,
   assertSafeRedirectTarget,
@@ -94,6 +101,9 @@ const EVENT_HINT_RULE_ROUTE_MODES = new Set(['car', 'bike', 'walk', 'public_tran
 const EVENT_HINT_WEATHER_RULES = new Set(['none', 'warn_rain', 'warn_snow', 'warn_rain_or_snow']);
 const EVENT_HINT_ALT_TRANSPORT_POLICIES = new Set(['always', 'bad_weather', 'tight_schedule', 'manual_note']);
 const EVENT_HINT_ACTIVE_WINDOW_HOURS = 24;
+
+const clampLlmTimeoutMs = (value) => Math.min(180000, Math.max(10000, Number(value) || 45000));
+const resolveLlmTimeoutMs = (llmConfig = {}) => clampLlmTimeoutMs((Number(llmConfig.timeoutSeconds) || 45) * 1000);
 
 const resolveContextRefreshMinutes = (contextConfig = {}) => {
   const explicitMinutes = Number(contextConfig?.refreshMinutes);
@@ -229,6 +239,7 @@ const DEFAULT_CONFIG = {
       baseUrl: '',
       privacyMode: 'cloud-redacted',
       pipeline: 'dossier',
+      timeoutSeconds: 45,
       suppressRoutineRecurringEvents: true,
     },
     transport: {
@@ -727,6 +738,7 @@ const normalizeConfig = (rawConfig = {}) => {
     ...config.services.llm,
     baseUrl: typeof config.services.llm?.baseUrl === 'string' ? config.services.llm.baseUrl.trim() : '',
     pipeline: config.services.llm?.pipeline === 'legacy' ? 'legacy' : 'dossier',
+    timeoutSeconds: Math.round(clampLlmTimeoutMs((Number(config.services.llm?.timeoutSeconds) || 45) * 1000) / 1000),
   };
   delete config.services.llm.refreshHours;
   config.services.travel.routingBaseUrl = typeof config.services.travel.routingBaseUrl === 'string'
@@ -6822,44 +6834,6 @@ const derivePrimaryActionFromInsights = (insights = []) => {
     .sort((left, right) => left.priority - right.priority)[0]?.text || '';
 };
 
-const extractTextContent = (value) => {
-  if (typeof value === 'string') {
-    return value;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => {
-      if (typeof entry === 'string') {
-        return entry;
-      }
-      if (typeof entry?.text === 'string') {
-        return entry.text;
-      }
-      if (entry?.type === 'text' && typeof entry.text === 'string') {
-        return entry.text;
-      }
-      if (typeof entry?.content === 'string') {
-        return entry.content;
-      }
-      if (typeof entry?.output_text === 'string') {
-        return entry.output_text;
-      }
-      return '';
-    }).join('\n');
-  }
-
-  if (value && typeof value === 'object') {
-    if (typeof value.text === 'string') {
-      return value.text;
-    }
-    if (typeof value.output_text === 'string') {
-      return value.output_text;
-    }
-  }
-
-  return '';
-};
-
 const normalizeJsonText = (text) => {
   const trimmed = text.trim();
   if (trimmed.startsWith('```')) {
@@ -6953,54 +6927,6 @@ const validateLlmBrief = (payload) => {
   };
 };
 
-const callOpenAiCompatible = async ({ baseUrl, apiKey, model, prompt, system = 'Respond with JSON only.' }) => {
-  assertSafeOutboundUrl(baseUrl, 'LLM Base URL');
-  const response = await axios.post(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
-    model,
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: prompt },
-    ],
-    response_format: { type: 'json_object' },
-    temperature: 0.2,
-  }, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-    },
-    timeout: 20000,
-  });
-
-  return {
-    text: extractTextContent(response.data?.choices?.[0]?.message?.content),
-    payload: response.data,
-  };
-};
-
-const callAnthropic = async ({ apiKey, model, prompt, system = 'Return valid JSON only.' }) => {
-  const response = await axios.post('https://api.anthropic.com/v1/messages', {
-    model,
-    max_tokens: 1200,
-    // No `temperature`: current Claude models reject it ("deprecated for this model") and older ones work without it.
-    system,
-    messages: [
-      { role: 'user', content: prompt },
-    ],
-  }, {
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
-    timeout: 20000,
-  });
-
-  return {
-    text: extractTextContent(response.data?.content),
-    payload: response.data,
-  };
-};
-
 const GOOGLE_BRIEF_RESPONSE_SCHEMA = {
   type: 'OBJECT',
   properties: {
@@ -7013,25 +6939,6 @@ const GOOGLE_BRIEF_RESPONSE_SCHEMA = {
     priority: { type: 'STRING' },
   },
   required: ['headline', 'bullets'],
-};
-
-const GOOGLE_BRIEF_RESPONSE_SCHEMA_V2 = {
-  type: 'OBJECT',
-  properties: {
-    bullets: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          text: { type: 'STRING' },
-          facts: { type: 'ARRAY', items: { type: 'STRING' } },
-          urgency: { type: 'STRING' },
-        },
-        required: ['text', 'facts'],
-      },
-    },
-  },
-  required: ['bullets'],
 };
 
 const GOOGLE_SELECTOR_RESPONSE_SCHEMA = {
@@ -7054,87 +6961,17 @@ const GOOGLE_SELECTOR_RESPONSE_SCHEMA = {
   required: ['items'],
 };
 
-const buildGoogleGenerateContentPayload = (prompt, responseSchema, system = '') => {
-  const generationConfig = {
-    temperature: 0.2,
-  };
-
-  if (responseSchema) {
-    generationConfig.responseMimeType = 'application/json';
-    generationConfig.responseSchema = responseSchema;
-  }
-
-  return {
-    ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: `${prompt}\n\nReturn valid JSON only.` }],
-      },
-    ],
-    generationConfig,
-  };
-};
-
-const callGoogleGenerativeAi = async ({ apiKey, model, prompt, system = '', responseSchema = GOOGLE_BRIEF_RESPONSE_SCHEMA }) => {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-  // The key travels in a header, not in the query string, so it cannot end up in logs or error messages.
-  const requestConfig = {
-    headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
-    timeout: 20000,
-  };
-
-  let response;
-  try {
-    response = await axios.post(
-      url,
-      buildGoogleGenerateContentPayload(prompt, responseSchema, system),
-      requestConfig,
-    );
-  } catch (error) {
-    const status = error?.response?.status;
-    if (status !== 400 || !responseSchema) {
-      throw error;
-    }
-
-    response = await axios.post(
-      url,
-      buildGoogleGenerateContentPayload(prompt, null, system),
-      requestConfig,
-    );
-  }
-
-  return {
-    text: extractTextContent(response.data?.candidates?.[0]?.content?.parts),
-    payload: response.data,
-  };
-};
-
-const callLlmProvider = async ({ provider, apiKey, model, baseUrl, prompt, system, responseSchema = GOOGLE_BRIEF_RESPONSE_SCHEMA }) => {
-  if (provider === 'anthropic') {
-    return callAnthropic({ apiKey, model, prompt, system });
-  }
-  if (provider === 'google') {
-    return callGoogleGenerativeAi({ apiKey, model, prompt, system, responseSchema });
-  }
-  if (provider === 'custom') {
-    return callOpenAiCompatible({
-      baseUrl: baseUrl || 'http://127.0.0.1:11434/v1',
-      apiKey,
-      model,
-      prompt,
-      system,
-    });
-  }
-
-  return callOpenAiCompatible({
-    baseUrl: baseUrl || 'https://api.openai.com/v1',
-    apiKey,
-    model,
-    prompt,
-    system,
-  });
-};
+// The provider layer (src/llm) turns this schema into whatever each provider accepts.
+const callLlmProvider = ({ provider, apiKey, model, baseUrl, prompt, system, timeoutMs, responseSchema = GOOGLE_BRIEF_RESPONSE_SCHEMA }) => generateJson({
+  provider,
+  apiKey,
+  model,
+  baseUrl,
+  system,
+  prompt,
+  schema: responseSchema,
+  timeoutMs,
+});
 
 // New pipeline (default): the software builds a verified dossier of today and tomorrow, the model only phrases
 // it, and src/brief/validate.js checks every sentence before it can reach the mirror.
@@ -7220,15 +7057,32 @@ const generateDossierBrief = async ({
     privacyMode,
     extraFacts,
     isIncluded,
-    callModel: ({ system, prompt }) => callLlmProvider({
-      provider,
-      apiKey,
-      model,
-      baseUrl: (llmConfig.baseUrl || '').trim(),
-      system,
-      prompt,
-      responseSchema: GOOGLE_BRIEF_RESPONSE_SCHEMA_V2,
-    }),
+    callModel: async ({ system, prompt }) => {
+      try {
+        const result = await callLlmProvider({
+          provider,
+          apiKey,
+          model,
+          baseUrl: (llmConfig.baseUrl || '').trim(),
+          system,
+          prompt,
+          timeoutMs: resolveLlmTimeoutMs(llmConfig),
+          responseSchema: COMPOSER_JSON_SCHEMA,
+        });
+        return {
+          text: result.text,
+          payload: result.payload,
+          call: { mode: result.mode, usage: result.usage, attempts: result.attempts, temperature: result.temperature ?? null },
+        };
+      } catch (error) {
+        // Keeps the key and raw upstream bodies out of the debug view and the stored context.
+        if (error?.response || error?.code) {
+          console.error('[llm] request failed:', error?.response?.status || error?.code, error?.message);
+        }
+        const status = error?.response?.status;
+        throw Object.assign(new Error(`${describeLlmError(error)}${status ? ` (HTTP ${status})` : ''}`), { providerPayload: error?.providerPayload ?? null });
+      }
+    },
     parseJson: parseLlmJson,
   });
 
@@ -8435,6 +8289,44 @@ app.get('/api/debug/travel-time', async (req, res) => {
     res.json(debug);
   } catch (error) {
     res.status(statusFor(error)).json({ error: 'Failed to read Travel Time debug log', details: safeDetails(error) });
+  }
+});
+
+app.get('/api/llm/providers', (req, res) => {
+  res.json({ providers: getLlmProviderInfo() });
+});
+
+// "Test connection": one tiny request with the settings currently shown in the UI (saved or not).
+// Always answers 200 with { ok, message } so the UI can show a friendly result.
+const testLlmLimiter = createRateLimiter({ windowMs: 60000, max: 10 });
+app.post('/api/llm/test', rateLimitMiddleware(testLlmLimiter), async (req, res) => {
+  try {
+    const incoming = req.body?.llm && typeof req.body.llm === 'object' ? req.body.llm : {};
+    const provider = ['openai', 'anthropic', 'google', 'custom'].includes(incoming.provider) ? incoming.provider : 'openai';
+    const model = typeof incoming.model === 'string' ? incoming.model.trim() : '';
+    const baseUrl = typeof incoming.baseUrl === 'string' ? incoming.baseUrl.trim() : '';
+    assertOptionalHttpUrl(baseUrl, 'LLM Base URL');
+
+    const [storedConfig, storedSecrets] = await Promise.all([readConfig(), readSecrets()]);
+    const typedKey = typeof incoming.apiKey === 'string' ? incoming.apiKey.trim() : '';
+    // The saved key is only used for the endpoint it was saved for (same rule as when saving the config).
+    const sameEndpoint = getLlmEndpoint(storedConfig.services.llm || {}) === getLlmEndpoint({ provider, baseUrl });
+    const apiKey = typedKey || (sameEndpoint ? (storedSecrets.llm?.apiKey || '') : '');
+
+    const result = await testConnection({
+      provider,
+      apiKey,
+      model,
+      baseUrl,
+      timeoutMs: resolveLlmTimeoutMs({ timeoutSeconds: incoming.timeoutSeconds }),
+    });
+    res.json(result);
+  } catch (error) {
+    if (error?.expose === true) {
+      return res.json({ ok: false, message: error.message });
+    }
+    console.error('[llm-test] failed:', error?.message || error);
+    return res.json({ ok: false, message: 'The connection test failed. See the backend log for details.' });
   }
 });
 

@@ -179,7 +179,33 @@ Gaps to close:
     brief until ticked in the brief calendar list: first e2e run had 0 eligible events for exactly this reason.
   - A hostile event title is still shown, inside quotation marks, by the deterministic notes.
   - Brief is still rebuilt (and the model called) on every context refresh with `force=true`; caching is Phase 5.
-- [ ] Phase 4
+- [x] Phase 4 – new `backend/src/llm/` (`providers`, `openai`, `anthropic`, `google`, `schema`, `retry`, `http`, `diagnostics`, `models`, `text`).
+  One interface `generateJson({provider, apiKey, model, baseUrl, system, prompt, schema, timeoutMs})` used by the dossier
+  pipeline (the legacy pipeline goes through the same layer). One readable schema per task; `prepareSchema` reshapes it per
+  provider (strict OpenAI: all properties required + `additionalProperties:false`; Anthropic: bounds removed; Gemini: upper
+  case types). Structured output first, then steps down on 400/422 and remembers what worked (in memory): OpenAI
+  `json_schema` strict -> `json_object` -> plain; Anthropic `output_config.format` -> plain; Gemini `responseSchema` -> plain.
+  `temperature` is only sent to gpt-3/4 style models and self-hosted servers, dropped (and remembered) when a server rejects it,
+  never sent to Anthropic. Anthropic `max_tokens` 1500; `max_tokens`/`length`/`MAX_TOKENS` and refusals are errors, not
+  half-parsed answers. Retry with backoff (1 s, 2 s, 4 s, cap 8 s, honours `Retry-After`) on 408/429/5xx/529/timeouts, at most
+  3 tries per request; timeout configurable (`services.llm.timeoutSeconds`, 10-180 s, default 45). Debug view has `call`
+  (mode, token usage, requests, temperature). Provider errors reach the UI/debug view as short plain sentences, not raw bodies.
+  `GET /api/llm/providers` (suggestions) and `POST /api/llm/test` (one tiny request, rate limited, saved key only used for the
+  endpoint it was saved for). Remote UI: provider/model suggestions, timeout field, "Test connection" button.
+  217 backend tests green; end to end against a local mock (structured, forced fallback, 401, 404, non-JSON answer, blocked
+  address, no token -> 401, no key in the backend log).
+  Known limits / open:
+  - STILL NOT run against the real Anthropic/OpenAI/Google endpoints. The request shapes follow the providers' documentation
+    as read on 2026-10-26 (Anthropic `output_config.format`, OpenAI `response_format.json_schema`, Gemini `responseSchema`).
+    The fallback ladder is there so a wrong guess degrades to plain JSON instead of failing, but only the "Test connection"
+    button on the Pi proves it.
+  - Model suggestions (`src/llm/models.js`) come from the providers' model pages as of 2026-10-26 and go stale; typing any
+    name still works. The default for new installs is still `gpt-5-mini` in the config template: not changed because it is
+    unverified whether that name is still served.
+  - The legacy pipeline now also gets structured output and retries; its selector/composer schemas are the old Gemini-style ones
+    (converted per provider by `prepareSchema`).
+  - `learned` capabilities live in memory only: a restart probes again (costs at most one extra failed request per model).
+  - Not covered: streaming, prompt caching, the OpenAI Responses API (Chat Completions is used; it keeps custom/local servers working).
 - [ ] Phase 5
 - [ ] Phase 6
 - [ ] Phase 7

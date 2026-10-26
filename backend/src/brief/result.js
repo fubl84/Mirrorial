@@ -17,6 +17,8 @@ const buildLlmResult = ({ run, provider, model, privacyMode, problems = [], now 
     prompt: run.debug?.prompt || '',
     rawResponse: run.debug?.rawResponse || '',
     providerPayload: run.debug?.providerPayload || null,
+    // How the model was reached: structured-output mode, token usage, number of requests, temperature sent.
+    call: run.debug?.call || null,
     parsedBrief: run.debug?.parsed || null,
     accepted: run.debug?.accepted || [],
     rejected: run.debug?.rejected || [],

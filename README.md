@@ -316,6 +316,12 @@ The mirror's notes are built in two steps so the AI cannot invent anything:
 
 On a quiet day there is nothing to say and the AI is not called. In the evening (from 18:00) the focus moves to tomorrow. Under **Integrations > LLM Context** the *Brief engine* can be switched back to the previous engine for one release.
 
+### Choosing an AI provider
+
+Under **Integrations > LLM Context** pick OpenAI, Anthropic, Google, or *Custom / local* (anything that speaks the OpenAI chat protocol, e.g. Ollama or LM Studio; set its Base URL). The model field suggests current model names, and you can type any other. Press **Test connection** after entering the key: it sends one tiny request with what is on screen, says in plain words what is wrong (wrong key, unknown model, no credit, unreachable server), and shows whether the provider returned structured JSON and how many tokens it used.
+
+Mirrorial asks each provider for schema-checked JSON when it supports it and falls back to plain JSON when it does not (for example with older models or small local models). Temporary provider errors (rate limit, overload, timeouts) are retried up to three times. The debug view of the Daily Brief shows how the model was reached (`call`: mode, tokens, requests). The notes are checked by Mirrorial in every case, so a weaker model can only make the AI part fall back to the built-in notes, not show wrong facts.
+
 What leaves the device in *Cloud redacted* mode: titles, places and times of today's and tomorrow's events plus the computed facts. Event notes, prep notes and addresses are only sent in *Full context*, and nothing is sent in *Off*.
 
 ## Security model

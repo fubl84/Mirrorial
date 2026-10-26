@@ -63,6 +63,7 @@ const runDossierBrief = async ({
     const result = await callModel({ system: COMPOSER_SYSTEM_PROMPT, prompt });
     debug.rawResponse = result?.text || '';
     debug.providerPayload = result?.payload || null;
+    debug.call = result?.call || null;
     if (!`${result?.text || ''}`.trim()) {
       throw Object.assign(new Error('empty_model_response'), { providerPayload: result?.payload || null });
     }

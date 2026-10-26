@@ -31,6 +31,8 @@ import {
 import MirrorPreview from './components/MirrorPreview';
 
 import { API_BASE, getBackendOrigin } from './api';
+import { LlmProviderFields } from './components/LlmProviderFields';
+import { LlmConnectionTest, LlmTimeoutField } from './components/LlmConnectionTest';
 
 const APP_VERSION = '1.0';
 const FONT_PREVIEW_STYLESHEETS = {
@@ -4549,28 +4551,10 @@ function App() {
                           onChange={(event) => updateServiceConfig('llm', 'enabled', event.target.checked)}
                         />
                       </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider</label>
-                        <select
-                          value={llmConfig.provider}
-                          onChange={(event) => updateServiceConfig('llm', 'provider', event.target.value)}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                        >
-                          <option value="openai">OpenAI</option>
-                          <option value="anthropic">Anthropic</option>
-                          <option value="google">Google</option>
-                          <option value="custom">Custom / local</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Model</label>
-                        <input
-                          type="text"
-                          value={llmConfig.model}
-                          onChange={(event) => updateServiceConfig('llm', 'model', event.target.value)}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
-                        />
-                      </div>
+                      <LlmProviderFields
+                        llmConfig={llmConfig}
+                        onChange={(key, value) => updateServiceConfig('llm', key, value)}
+                      />
                       <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Base URL</label>
                         <input
@@ -4636,6 +4620,11 @@ function App() {
                           The recommended engine works out times, overlaps and travel itself and only lets the AI phrase them. Every sentence is checked before it appears on the mirror. The previous engine stays available for one release.
                         </div>
                       </div>
+                      <LlmTimeoutField
+                        llmConfig={llmConfig}
+                        onChange={(key, value) => updateServiceConfig('llm', key, value)}
+                      />
+                      <LlmConnectionTest llmConfig={llmConfig} />
                     </div>
                   </section>
                 )}
