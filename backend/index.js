@@ -69,7 +69,8 @@ const {
   getCalendarNameFromIcs,
   parseOwnerEmails,
 } = require('./src/calendar/icsMeta');
-const { hasMedicalSignal, normalizeContextRules } = require('./src/brief/rules');
+const { applyRuleAction, hasMedicalSignal, normalizeContextRules } = require('./src/brief/rules');
+const { explainEvents } = require('./src/brief/explain');
 const { HOUSEHOLD_EVENT_PATTERNS, RECURRING_ALWAYS_KEEP_PATTERNS } = require('./src/brief/householdPatterns');
 
 const app = express();
@@ -8003,6 +8004,60 @@ app.post('/api/debug/daily-brief/rebuild', limitExpensive, async (req, res) => {
     res.json({ success: true, debug });
   } catch (error) {
     res.status(statusFor(error)).json({ error: 'Failed to rebuild Daily Brief debug log', details: safeDetails(error) });
+  }
+});
+
+// "Why is this shown?": every upcoming event of the next days with the rule that decided it. Read-only, no model call.
+app.get('/api/brief/explain', async (req, res) => {
+  try {
+    const [config, calendarCache] = await Promise.all([readConfig(), loadCalendarCache()]);
+    const now = Date.now();
+    const events = explainEvents({
+      events: calendarCache.events,
+      now,
+      timeZone: getConfigTimeZone(config),
+      isInScope: (event) => isEventIncludedInDailyBrief(event, config),
+      classify: (event) => explainBriefEventSelection(event, config, now),
+    });
+    res.json({
+      events,
+      rules: getContextRules(config),
+      calendarSyncedAt: calendarCache.syncedAt || null,
+      timeZone: getConfigTimeZone(config),
+    });
+  } catch (error) {
+    res.status(statusFor(error)).json({ error: 'Failed to explain the brief selection', details: safeDetails(error) });
+  }
+});
+
+// Pin / mute / clear for one event. Only services.context.rules changes, through the same save as the settings
+// page, then the brief is rebuilt so the result is visible at once. The model is NOT asked again unless the
+// dossier changed (a muted event leaves the dossier, so it usually is).
+app.post('/api/brief/rules', limitExpensive, async (req, res) => {
+  try {
+    const action = typeof req.body?.action === 'string' ? req.body.action : '';
+    const keyword = typeof req.body?.keyword === 'string' ? req.body.keyword : '';
+    const eventId = typeof req.body?.eventId === 'string' ? req.body.eventId : '';
+    if (!['pin', 'mute', 'clear'].includes(action)) {
+      throw new PublicError('action must be "pin", "mute" or "clear".');
+    }
+
+    const [config, calendarCache] = await Promise.all([readConfig(), loadCalendarCache()]);
+    const event = eventId ? (calendarCache.events || []).find((entry) => entry.id === eventId) : null;
+    let result;
+    try {
+      result = applyRuleAction(config.services.context.rules, action, keyword, event);
+    } catch (error) {
+      throw new PublicError(error.message);
+    }
+
+    config.services.context.rules = result.rules;
+    await saveConfig(config);
+    // saveConfig() runs the settings page through the secret handling; the full config read above has no secrets in it.
+    contextRunner.trigger();
+    res.json({ success: true, rules: result.rules, removed: result.removed });
+  } catch (error) {
+    res.status(statusFor(error)).json({ error: 'Failed to change the rule', details: safeDetails(error) });
   }
 });
 

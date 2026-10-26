@@ -30,6 +30,7 @@ import {
 import MirrorPreview from './components/MirrorPreview';
 
 import { API_BASE, getBackendOrigin } from './api';
+import { BriefExplain } from './components/BriefExplain';
 import { LlmProviderFields } from './components/LlmProviderFields';
 import { LlmConnectionTest, LlmTimeoutField } from './components/LlmConnectionTest';
 
@@ -4124,6 +4125,12 @@ function App() {
                           <div className="text-xs text-slate-500">
                             Changes to the schedule ("Ersatz", "entfällt", "verschoben", "cancelled", "moved") and doctor or therapy appointments are always shown, even when they repeat. The only way to hide them is to list a word from them under "Never show".
                           </div>
+                          <BriefExplain
+                            onRulesChanged={(rules) => updateConfig((draft) => {
+                              draft.services.context.rules = rules;
+                              return draft;
+                            })}
+                          />
                         </div>
 
                         <div>
