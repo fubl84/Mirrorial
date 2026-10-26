@@ -48,10 +48,53 @@ const getEventDayOffset = (event, now = Date.now(), timeZone = 'UTC') => {
   return eventKey ? dayKeyDiff(getLocalDateKey(now, timeZone), eventKey) : null;
 };
 
+// "14:30" in the given zone (24 h, zero padded).
+const formatLocalTime = (ms, timeZone = 'UTC') => new Intl.DateTimeFormat('en-GB', {
+  timeZone: safeTimeZone(timeZone),
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+}).format(new Date(ms));
+
+const getLocalHour = (ms, timeZone = 'UTC') => Number(new Intl.DateTimeFormat('en-GB', {
+  timeZone: safeTimeZone(timeZone),
+  hour: '2-digit',
+  hourCycle: 'h23',
+}).format(new Date(ms)));
+
+// night 00-04, morning 05-11, afternoon 12-16, evening 17-23
+const getTimeOfDay = (ms, timeZone = 'UTC') => {
+  const hour = getLocalHour(ms, timeZone);
+  if (hour < 5) return 'night';
+  if (hour < 12) return 'morning';
+  if (hour < 17) return 'afternoon';
+  return 'evening';
+};
+
+// "Thu 16 Apr"
+const formatWeekdayDate = (ms, timeZone = 'UTC') => new Intl.DateTimeFormat('en-GB', {
+  timeZone: safeTimeZone(timeZone),
+  weekday: 'short',
+  day: 'numeric',
+  month: 'short',
+}).format(new Date(ms));
+
+// Shifts a "YYYY-MM-DD" key by whole days (calendar arithmetic, immune to DST).
+const addDaysToKey = (key, days) => {
+  const [year, month, day] = `${key}`.split('-').map(Number);
+  const shifted = new Date(Date.UTC(year, (month || 1) - 1, (day || 1) + days));
+  return shifted.toISOString().slice(0, 10);
+};
+
 module.exports = {
+  addDaysToKey,
   dayKeyDiff,
+  formatLocalTime,
+  formatWeekdayDate,
   getEventDayKey,
   getEventDayOffset,
   getLocalDateKey,
+  getLocalHour,
+  getTimeOfDay,
   safeTimeZone,
 };

@@ -34,6 +34,12 @@ const {
 } = require('./src/security/haToken');
 const { classifyBriefEvent, isLowValueRoutineEvent, DISTINCTIVE_EVENT_PATTERN } = require('./src/brief/selection');
 const { selectEventsByHorizon } = require('./src/brief/horizon');
+const { runDossierBrief } = require('./src/brief/run');
+const { collectExtraFacts } = require('./src/brief/extraFacts');
+const { pickWindowEvents } = require('./src/brief/dossier');
+const { checkLlmPreconditions } = require('./src/brief/gate');
+const { getBriefFocus } = require('./src/brief/dossier');
+const { buildLlmResult, buildSkippedResult } = require('./src/brief/result');
 const {
   MAX_ICS_BYTES,
   assertSafeRedirectTarget,
@@ -222,6 +228,7 @@ const DEFAULT_CONFIG = {
       model: 'gpt-5-mini',
       baseUrl: '',
       privacyMode: 'cloud-redacted',
+      pipeline: 'dossier',
       suppressRoutineRecurringEvents: true,
     },
     transport: {
@@ -719,6 +726,7 @@ const normalizeConfig = (rawConfig = {}) => {
   config.services.llm = {
     ...config.services.llm,
     baseUrl: typeof config.services.llm?.baseUrl === 'string' ? config.services.llm.baseUrl.trim() : '',
+    pipeline: config.services.llm?.pipeline === 'legacy' ? 'legacy' : 'dossier',
   };
   delete config.services.llm.refreshHours;
   config.services.travel.routingBaseUrl = typeof config.services.travel.routingBaseUrl === 'string'
@@ -6945,12 +6953,12 @@ const validateLlmBrief = (payload) => {
   };
 };
 
-const callOpenAiCompatible = async ({ baseUrl, apiKey, model, prompt }) => {
+const callOpenAiCompatible = async ({ baseUrl, apiKey, model, prompt, system = 'Respond with JSON only.' }) => {
   assertSafeOutboundUrl(baseUrl, 'LLM Base URL');
   const response = await axios.post(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
     model,
     messages: [
-      { role: 'system', content: 'Respond with JSON only.' },
+      { role: 'system', content: system },
       { role: 'user', content: prompt },
     ],
     response_format: { type: 'json_object' },
@@ -6969,12 +6977,12 @@ const callOpenAiCompatible = async ({ baseUrl, apiKey, model, prompt }) => {
   };
 };
 
-const callAnthropic = async ({ apiKey, model, prompt }) => {
+const callAnthropic = async ({ apiKey, model, prompt, system = 'Return valid JSON only.' }) => {
   const response = await axios.post('https://api.anthropic.com/v1/messages', {
     model,
-    max_tokens: 500,
+    max_tokens: 1200,
     temperature: 0.2,
-    system: 'Return valid JSON only.',
+    system,
     messages: [
       { role: 'user', content: prompt },
     ],
@@ -7007,6 +7015,25 @@ const GOOGLE_BRIEF_RESPONSE_SCHEMA = {
   required: ['headline', 'bullets'],
 };
 
+const GOOGLE_BRIEF_RESPONSE_SCHEMA_V2 = {
+  type: 'OBJECT',
+  properties: {
+    bullets: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          text: { type: 'STRING' },
+          facts: { type: 'ARRAY', items: { type: 'STRING' } },
+          urgency: { type: 'STRING' },
+        },
+        required: ['text', 'facts'],
+      },
+    },
+  },
+  required: ['bullets'],
+};
+
 const GOOGLE_SELECTOR_RESPONSE_SCHEMA = {
   type: 'OBJECT',
   properties: {
@@ -7027,7 +7054,7 @@ const GOOGLE_SELECTOR_RESPONSE_SCHEMA = {
   required: ['items'],
 };
 
-const buildGoogleGenerateContentPayload = (prompt, responseSchema) => {
+const buildGoogleGenerateContentPayload = (prompt, responseSchema, system = '') => {
   const generationConfig = {
     temperature: 0.2,
   };
@@ -7038,6 +7065,7 @@ const buildGoogleGenerateContentPayload = (prompt, responseSchema) => {
   }
 
   return {
+    ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
     contents: [
       {
         role: 'user',
@@ -7048,7 +7076,7 @@ const buildGoogleGenerateContentPayload = (prompt, responseSchema) => {
   };
 };
 
-const callGoogleGenerativeAi = async ({ apiKey, model, prompt, responseSchema = GOOGLE_BRIEF_RESPONSE_SCHEMA }) => {
+const callGoogleGenerativeAi = async ({ apiKey, model, prompt, system = '', responseSchema = GOOGLE_BRIEF_RESPONSE_SCHEMA }) => {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   // The key travels in a header, not in the query string, so it cannot end up in logs or error messages.
   const requestConfig = {
@@ -7060,7 +7088,7 @@ const callGoogleGenerativeAi = async ({ apiKey, model, prompt, responseSchema = 
   try {
     response = await axios.post(
       url,
-      buildGoogleGenerateContentPayload(prompt, responseSchema),
+      buildGoogleGenerateContentPayload(prompt, responseSchema, system),
       requestConfig,
     );
   } catch (error) {
@@ -7071,7 +7099,7 @@ const callGoogleGenerativeAi = async ({ apiKey, model, prompt, responseSchema = 
 
     response = await axios.post(
       url,
-      buildGoogleGenerateContentPayload(prompt, null),
+      buildGoogleGenerateContentPayload(prompt, null, system),
       requestConfig,
     );
   }
@@ -7082,12 +7110,12 @@ const callGoogleGenerativeAi = async ({ apiKey, model, prompt, responseSchema = 
   };
 };
 
-const callLlmProvider = async ({ provider, apiKey, model, baseUrl, prompt, responseSchema = GOOGLE_BRIEF_RESPONSE_SCHEMA }) => {
+const callLlmProvider = async ({ provider, apiKey, model, baseUrl, prompt, system, responseSchema = GOOGLE_BRIEF_RESPONSE_SCHEMA }) => {
   if (provider === 'anthropic') {
-    return callAnthropic({ apiKey, model, prompt });
+    return callAnthropic({ apiKey, model, prompt, system });
   }
   if (provider === 'google') {
-    return callGoogleGenerativeAi({ apiKey, model, prompt, responseSchema });
+    return callGoogleGenerativeAi({ apiKey, model, prompt, system, responseSchema });
   }
   if (provider === 'custom') {
     return callOpenAiCompatible({
@@ -7095,6 +7123,7 @@ const callLlmProvider = async ({ provider, apiKey, model, baseUrl, prompt, respo
       apiKey,
       model,
       prompt,
+      system,
     });
   }
 
@@ -7103,7 +7132,107 @@ const callLlmProvider = async ({ provider, apiKey, model, baseUrl, prompt, respo
     apiKey,
     model,
     prompt,
+    system,
   });
+};
+
+// New pipeline (default): the software builds a verified dossier of today and tomorrow, the model only phrases
+// it, and src/brief/validate.js checks every sentence before it can reach the mirror.
+const generateDossierBrief = async ({
+  calendarCache,
+  config,
+  secrets,
+  household,
+  activeTrip,
+  recentTrip,
+  commuteContext,
+  householdEventContext,
+  birthdayContext,
+  routingConfig,
+  routingSecrets,
+  geocodeCache,
+  routingCache,
+  existingContext,
+  force,
+}) => {
+  const llmConfig = config.services.llm || {};
+  const provider = llmConfig.provider || 'openai';
+  const model = llmConfig.model || 'gpt-5-mini';
+  const privacyMode = llmConfig.privacyMode || 'cloud-redacted';
+  const apiKey = secrets.llm?.apiKey || '';
+
+  const gate = checkLlmPreconditions({ llmConfig, apiKey });
+  if (gate) {
+    return buildSkippedResult({ gate, provider, model, privacyMode });
+  }
+
+  const refreshMinutes = resolveContextRefreshMinutes(config.services.context);
+  const existingLlm = existingContext?.llm;
+  const isFresh = existingLlm?.updatedAt
+    && existingLlm?.debug?.pipeline === 'dossier'
+    && (Date.now() - new Date(existingLlm.updatedAt).getTime()) < (refreshMinutes * 60000);
+  if (!force && isFresh && existingLlm.status === 'ready') {
+    return existingLlm;
+  }
+
+  const now = Date.now();
+  const timeZone = config.system?.timezone || 'UTC';
+  const locale = config.system?.displayLocale === 'de' ? 'de' : 'en';
+  const isIncluded = (event) => explainBriefEventSelection(event, config, now).include;
+  const windowEvents = pickWindowEvents({ events: calendarCache.events, now, timeZone, isIncluded });
+
+  const hintStrings = async (event) => {
+    const rule = findMatchingEventHintRule(event, config);
+    if (!rule) {
+      return [];
+    }
+    const base = buildInsightFactsFromEventHintRule(rule, event)?.addedFacts || [];
+    const route = await buildEventHintRouteFacts({ event, eventHintRule: rule, household, config, routingConfig, routingSecrets, geocodeCache, routingCache });
+    const weather = await buildEventHintWeatherFacts({ event, eventHintRule: rule, household, config, routingConfig, routingSecrets, geocodeCache });
+    const alternatives = buildEventHintAlternativeTransportFacts({ event, eventHintRule: rule, weatherFacts: weather, routeFacts: route });
+    return [...base, ...(route?.addedFacts || []), ...(weather?.addedFacts || []), ...(alternatives?.addedFacts || [])];
+  };
+
+  const { facts: extraFacts, problems } = await collectExtraFacts({
+    windowEvents,
+    now,
+    timeZone,
+    focus: getBriefFocus(now, timeZone),
+    privacyMode,
+    birthdayContext,
+    sources: {
+      contextStrings: (event) => buildInsightFactsFromContext(event, activeTrip, recentTrip, commuteContext, householdEventContext)?.addedFacts || [],
+      hintStrings,
+      homeWeather: async (day) => {
+        const start = new Date(now + (day === 'tomorrow' ? 86400000 : 0));
+        const forecast = await tryFetchHomeForecast(config, household, start, start);
+        const bucket = forecast?.weatherCode !== undefined && forecast?.weatherCode !== null ? weatherCodeToBucket(forecast.weatherCode) : '';
+        return forecast ? { forecast, bucket } : null;
+      },
+    },
+  });
+
+  const run = await runDossierBrief({
+    events: calendarCache.events,
+    now,
+    timeZone,
+    locale,
+    privacyMode,
+    extraFacts,
+    isIncluded,
+    callModel: ({ system, prompt }) => callLlmProvider({
+      provider,
+      apiKey,
+      model,
+      baseUrl: (llmConfig.baseUrl || '').trim(),
+      system,
+      prompt,
+      responseSchema: GOOGLE_BRIEF_RESPONSE_SCHEMA_V2,
+    }),
+    parseJson: parseLlmJson,
+  });
+
+  return buildLlmResult({ run, provider, model, privacyMode, problems });
 };
 
 const generateLlmBrief = async ({
@@ -7452,7 +7581,8 @@ const buildContext = async (calendarCache, config, secrets, household, existingC
     : null;
   const highlightEventContext = enabledSignals.highlights ? buildHighlightEventContext(briefEvents, config) : null;
   const refreshMinutes = resolveContextRefreshMinutes(config.services.context);
-  const llm = await generateLlmBrief({
+  const generateBrief = config.services.llm?.pipeline === 'legacy' ? generateLlmBrief : generateDossierBrief;
+  const llm = await generateBrief({
     calendarCache: {
       ...calendarCache,
       events: briefEvents,
@@ -7465,6 +7595,7 @@ const buildContext = async (calendarCache, config, secrets, household, existingC
     nextEvent,
     commuteContext,
     householdEventContext,
+    birthdayContext,
     routingConfig,
     routingSecrets: secrets.routing || {},
     geocodeCache,

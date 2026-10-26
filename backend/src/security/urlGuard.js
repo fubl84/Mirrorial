@@ -79,6 +79,18 @@ const getUrlOrigin = (value) => {
   }
 };
 
+const LOCAL_HOST_PATTERNS = ['localhost', '127.0.0.1', '::1'];
+
+// True for endpoints on this machine or the local network name space (".local"). Used by "local-only" privacy mode.
+const isLocalBaseUrl = (baseUrl = '') => {
+  try {
+    const hostname = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '');
+    return LOCAL_HOST_PATTERNS.includes(hostname) || hostname.endsWith('.local');
+  } catch (error) {
+    return false;
+  }
+};
+
 const sameUrlOrigin = (left, right) => {
   const leftOrigin = getUrlOrigin(left);
   return Boolean(leftOrigin) && leftOrigin === getUrlOrigin(right);
@@ -87,6 +99,7 @@ const sameUrlOrigin = (left, right) => {
 module.exports = {
   assertSafeOutboundUrl,
   getUrlOrigin,
+  isLocalBaseUrl,
   isSafeOutboundUrl,
   sameUrlOrigin,
 };

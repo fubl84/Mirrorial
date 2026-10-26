@@ -4618,6 +4618,23 @@ function App() {
                           <option value="cloud-redacted">Cloud redacted</option>
                           <option value="full">Full context</option>
                         </select>
+                        <div className="text-xs text-slate-500 mt-2">
+                          Cloud redacted sends titles, places and times of today and tomorrow. Event notes, prep notes and addresses are only sent in Full context.
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Brief engine</label>
+                        <select
+                          value={llmConfig.pipeline === 'legacy' ? 'legacy' : 'dossier'}
+                          onChange={(event) => updateServiceConfig('llm', 'pipeline', event.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#ff8bbf] transition-all text-sm"
+                        >
+                          <option value="dossier">Verified notes (recommended)</option>
+                          <option value="legacy">Previous engine</option>
+                        </select>
+                        <div className="text-xs text-slate-500 mt-2">
+                          The recommended engine works out times, overlaps and travel itself and only lets the AI phrase them. Every sentence is checked before it appears on the mirror. The previous engine stays available for one release.
+                        </div>
                       </div>
                     </div>
                   </section>

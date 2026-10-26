@@ -307,6 +307,17 @@ Treat a subscription link like a password: anyone with it can read the calendar.
 
 Under **Integrations > LLM Context** you can add words for three lists: always show, never show, and repeating events that count as routine. Matching ignores upper/lower case and accents (`Fußball` finds `fussball`). Schedule changes (Ersatz, entfällt, verschoben, cancelled, moved) and doctor or therapy appointments are always shown, even when they repeat, unless you list a word from them under "never show".
 
+## How the AI notes are made
+
+The mirror's notes are built in two steps so the AI cannot invent anything:
+
+1. **Mirrorial works out the facts itself:** what is on today and tomorrow, overlapping appointments, little time between two places, schedule changes, medical appointments without a location, an early start tomorrow, a busy day, leave-by times and rain on days someone leaves the house. Calendar text is treated as data, never as instructions.
+2. **The AI only phrases them.** Each note has to name the facts it is based on. Notes that cite nothing, contain a link, or mention a time, duration or temperature that is not in those facts are discarded. Overlaps, schedule changes and tight transitions the AI left out are added by Mirrorial itself, so they cannot go missing, even when the AI provider is down.
+
+On a quiet day there is nothing to say and the AI is not called. In the evening (from 18:00) the focus moves to tomorrow. Under **Integrations > LLM Context** the *Brief engine* can be switched back to the previous engine for one release.
+
+What leaves the device in *Cloud redacted* mode: titles, places and times of today's and tomorrow's events plus the computed facts. Event notes, prep notes and addresses are only sent in *Full context*, and nothing is sent in *Off*.
+
 ## Security model
 
 The backend API is protected by an access token.

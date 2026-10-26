@@ -78,6 +78,26 @@ rate limit trips; URL guard cases tested; display app and remote UI still work.
 - 3.7 Remove the selector call. Keep the old pipeline behind `services.llm.pipeline = "legacy"` for one release.
 - 3.8 Golden tests: dossier snapshots from real days; mocked LLM responses for validator tests.
 
+### Phase 3 design notes (decided before implementation)
+
+- **The software computes, the model only phrases.** Facts (overlaps, tight transitions, medical, schedule change, missing
+  location, early start, busy day, rain, birthdays, leave-by from route data) are computed in code and get refs `f1..fn`;
+  events get refs `e1..en`. The model returns `{bullets:[{text, facts:[refs], urgency}]}`; there is no model headline.
+- **Validation instead of fuzzy filtering.** A bullet survives only if it cites at least one real fact, has no link, is
+  short, and every clock time / duration / temperature in it appears in the facts or events it cites. This replaces the
+  English-token-overlap filter that deleted correct German bullets.
+- **Important things can't be skipped.** Conflicts, schedule changes and tight transitions that no bullet cites get a
+  deterministic bullet (en/de templates), so a model omission never hides them.
+- **Time aware.** Window is today + tomorrow; focus moves to tomorrow in the evening. Later events appear only if the user
+  configured context for them (hint rules, trips). Quiet days make no LLM call.
+- **Untrusted text.** Titles/locations are flattened, capped, put in JSON data, and the system prompt says they are data.
+  Descriptions are only sent in `full` privacy mode. Prep notes / household context / addresses are no longer sent in
+  `cloud-redacted` mode (they were before).
+- **Old pipeline stays** behind `services.llm.pipeline = "legacy"` for one release (default `dossier`).
+- **Deliberately not in Phase 3:** fingerprint-based LLM caching and background refresh (Phase 5), provider
+  structured-output upgrades and retries (Phase 4). Two small provider changes are done now because the new output needs
+  them: a separate system message, and Anthropic `max_tokens` 500 -> 1200.
+
 ## Phase 4 – LLM providers (OpenAI, Anthropic, Google, custom)
 
 Status: all four already exist (`callOpenAiCompatible`, `callAnthropic`, `callGoogleGenerativeAi`, custom = OpenAI-compatible).
@@ -141,7 +161,24 @@ Gaps to close:
   the event description. 114 backend tests green; live check against a local feed server (redirects, 401, oversize, auth).
   Open: the routine pattern still hides any non-recurring title containing "lesson"/"unterricht" (e.g. "Online Lessons
   Monthly Performance & Achievement Update"); decide in Phase 3 whether that stays a hard rule.
-- [ ] Phase 3
+- [x] Phase 3 – `src/brief/{dossier,facts,schedule,clock,validate,composer,fallback,contextFacts,extraFacts,gate,result,run}.js`.
+  New default engine `services.llm.pipeline = "dossier"` (old one: `"legacy"`). One model call instead of two, only when
+  there are facts; facts are computed in code, the model cites them, `validate.js` checks every bullet (cited fact, no link,
+  times/durations/temperatures must be in the cited facts), uncited conflicts / schedule changes / tight transitions are added
+  deterministically in de/en, a provider outage degrades to those notes. `privacyMode: off` now really blocks the call;
+  prep notes, household context and addresses are no longer sent in cloud-redacted mode. 181 backend tests green; end-to-end
+  run against a mock provider (good, hallucinated time, empty, garbage, injection, HTTP 500) behaved as designed.
+  Known limits / open:
+  - NOT verified against a real Anthropic/OpenAI/Google endpoint (mock only). Anthropic `max_tokens` 500 -> 1200 and the
+    separate system message are untested live.
+  - Overlaps are detected between ALL events in the brief calendars. Two different family members' appointments at the same
+    time are reported as a conflict. Needs a "same person" notion (household member <-> calendar) before it is reliable.
+  - Leave-by times exist only for events matched by an event hint rule (with address), commute or trips; there is no generic
+    "leave by" for any event with a location yet.
+  - With `briefCalendarMode: include_selected` (current Pi config) newly added subscription calendars are NOT part of the
+    brief until ticked in the brief calendar list: first e2e run had 0 eligible events for exactly this reason.
+  - A hostile event title is still shown, inside quotation marks, by the deterministic notes.
+  - Brief is still rebuilt (and the model called) on every context refresh with `force=true`; caching is Phase 5.
 - [ ] Phase 4
 - [ ] Phase 5
 - [ ] Phase 6
