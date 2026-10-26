@@ -41,3 +41,4 @@ Thumbs.db
 
 # Swap files
 /var/mirrorial_swap
+.aider*
