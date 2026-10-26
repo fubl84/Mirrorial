@@ -340,7 +340,20 @@ Gaps to close:
     the brief goes on. End-to-end test: the warning reaches the model as a citable fact.
   - **8.3 Docs** (README): the new view and pin/mute, leave-by and outdoor-rain rules, environment variable table, time zone, lockout,
     token for a display on another device, no stack traces.
+  - **Follow-up: calendar sync tests and fetcher split** (382 backend tests). Closes the Phase 5/7 gap "the sync runners are only covered
+    by the live script". `test/helpers/calendarServer.js` is a fake calendar server (ICS feed, minimal CalDAV, switchable to
+    failing, request counters); `httpCalendarSync.test.js` and `httpCalDav.test.js` run the real app against it: subscription
+    fetched and served to the display, ten simultaneous syncs fetch at most twice, a dead feed keeps its events and is marked stale
+    (and the failing server's raw body is not passed on), recovery clears the mark, a never-working source has nothing to fall back
+    to, a disabled source is not fetched, removing a source removes its events, CalDAV discovery + query + parse, password never
+    returned, metadata addresses refused on save (400, with the reason, nothing stored). THEN the fetchers moved out of
+    `index.js` into `src/calendar/fetchers.js` (280 lines): the tests passed before and after. `index.js` 8143 -> 7944 lines.
+    Same method as before (marker-based script that refuses to cut when a marker is not unique, ESLint `no-undef` caught the
+    three call sites that still needed the import).
   Not done:
+  - **Deleting the legacy brief pipeline.** Deliberately NOT done. The plan promised `pipeline: "legacy"` stays selectable for one
+    release, and the new pipeline has never run against a real provider on the Pi; removing the fallback before that has been seen
+    working would take away the only way back. Delete it once the new one has run on the Pi for a while.
   - **Rules editor as a separate screen.** The existing three word lists plus the new view cover the plan's "rules editor"; a richer
     editor (per-calendar rules, time windows, test-a-word preview) was not built.
   - **Leave-by and rain are not shown on the mirror as separate elements.** They are facts for the brief: the model phrases them, and
