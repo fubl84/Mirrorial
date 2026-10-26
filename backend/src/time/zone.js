@@ -63,6 +63,28 @@ const getWallClockFormatter = (timeZone) => {
   return wallClockFormatters.get(timeZone);
 };
 
+// Whether the runtime knows a zone name. Checked once per name: a calendar with thousands of events asks for the
+// same zone thousands of times, and constructing an Intl.DateTimeFormat each time is slow and memory-hungry on a
+// small board. Feeds could name arbitrary zones, so the cache is capped.
+const MAX_ZONE_CACHE = 200;
+const knownZoneCache = new Map();
+const isKnownZone = (zone) => {
+  if (knownZoneCache.has(zone)) {
+    return knownZoneCache.get(zone);
+  }
+  let known = true;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone }).format(0);
+  } catch (error) {
+    known = false;
+  }
+  if (knownZoneCache.size >= MAX_ZONE_CACHE) {
+    knownZoneCache.clear();
+  }
+  knownZoneCache.set(zone, known);
+  return known;
+};
+
 // Offset of a zone from UTC at a given instant, in ms (positive east of Greenwich).
 const getZoneOffsetMs = (ms, timeZone) => {
   const parts = getWallClockFormatter(timeZone).formatToParts(new Date(ms));
@@ -77,12 +99,7 @@ const getZoneOffsetMs = (ms, timeZone) => {
 // forward by the gap (09:30 in a 02:00->03:00 jump becomes 03:30), a repeated one takes the first occurrence.
 const zonedWallTimeToMs = ({ year, month, day, hour = 0, minute = 0, second = 0 }, timeZone) => {
   const zone = typeof timeZone === 'string' ? timeZone.trim() : '';
-  if (!zone) {
-    return null;
-  }
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: zone }).format(0);
-  } catch (error) {
+  if (!zone || !isKnownZone(zone)) {
     return null;
   }
 

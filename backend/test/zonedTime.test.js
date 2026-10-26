@@ -44,6 +44,19 @@ test('the date rolls over correctly near midnight', () => {
   assert.equal(iso(at(2026, 4, 15, 23, 30, 'Pacific/Auckland')), '2026-04-15T11:30:00.000Z');
 });
 
+test('repeated lookups of a zone name give the same answer (the zone check is cached)', () => {
+  const first = at(2026, 4, 15, 9, 0, 'Europe/Berlin');
+  for (let index = 0; index < 50; index += 1) {
+    assert.equal(at(2026, 4, 15, 9, 0, 'Europe/Berlin'), first);
+    assert.equal(at(2026, 4, 15, 9, 0, 'Mars/Olympus'), null);
+  }
+  // Many different bogus names (a hostile feed) must neither throw nor change the answer for a real zone.
+  for (let index = 0; index < 500; index += 1) {
+    assert.equal(at(2026, 4, 15, 9, 0, `Nowhere/Zone${index}`), null);
+  }
+  assert.equal(at(2026, 4, 15, 9, 0, 'Europe/Berlin'), first);
+});
+
 test('an unknown or empty zone returns null instead of guessing', () => {
   assert.equal(at(2026, 4, 15, 9, 0, 'Mars/Olympus'), null);
   assert.equal(at(2026, 4, 15, 9, 0, ''), null);
