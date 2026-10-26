@@ -317,5 +317,43 @@ Gaps to close:
   - The new context/sync runners (Phase 5) are still only covered by the live script, not by an HTTP test with a fake calendar server.
   - CI uses Node 20 (what is installed here) and `flutter-action` with the stable channel; the Pi installer's Node version was not checked.
   - The `useEffect` dependency warnings can hide stale-closure bugs in the remote UI; nobody has reproduced one.
-- [ ] Phase 8
+- [x] Phase 8 (partly, see "Not done"). 370 backend tests, 29 Dart tests, `flutter analyze` clean, remote UI lint 0 errors, build ok.
+  - **8.1 "Why is this shown?" + pin/mute** (`src/brief/explain.js`, `applyRuleAction` in `src/brief/rules.js`, `GET /api/brief/explain`,
+    `POST /api/brief/rules`, `remote_ui/src/components/BriefExplain.jsx`, shown under the word lists in Integrations > LLM Context).
+    Every upcoming event of the next 3 days with the rule that decided it, in plain words (all 18 reason codes have a text, tested).
+    Mute -> `neverShow`, Pin -> `alwaysShow`, both through the normal config save (checked: an API key in the secrets file survives
+    and never lands in `config.json`). Pinning an event that a never-show word hides removes that word and says so, because never-show
+    wins over always-show and the pin would otherwise do nothing. Events outside the brief calendars cannot be pinned (a title rule
+    would not change that). The parent page's copy of the rules is updated, so its next "Save" does not write the old lists back.
+    Rendered in headless Chrome against the real backend: initial list, after Mute (event flips to "Hidden by your rule", button
+    becomes Pin, parent copy updated), after Pin (flips back, "Never show" emptied).
+  - **8.2 Leave-by** (`src/brief/leaveBy.js`): found a real defect, not only a missing feature. The old code guarded the leave-by statement
+    with `leaveByTimestamp > 0` (a comparison with 1970), so (a) a straight-line distance guess, which `getRouteEstimate` returns
+    when no routing provider answers, was turned into "Leave around 10:30", and (b) a departure time that had already passed was
+    still stated as ahead. Now: a guess becomes "Rough estimate ... (no live route)" and never a departure time; a passed departure
+    time becomes "Leave now: the planned departure time (08:55) has already passed" while the appointment is ahead; nothing after the
+    start. No countdown in the wording (it would change every minute and defeat the Phase 5 model cache; tested).
+  - **8.2 Rain at outdoor plans** (`isOutdoorEvent`, `buildOutdoorWeatherFact`): a timed, non-online event with outdoor words (the
+    existing household list plus Grillen, Spielplatz, Wanderung, Freibad, Ausflug, Gartenfest) gets its own warning
+    on rain/snow, naming the event; it replaces the general weather note for that day. Forecast is per day, so the text says
+    "forecast for today", never an hour. One forecast lookup per day however many outdoor events; a failing lookup is reported and
+    the brief goes on. End-to-end test: the warning reaches the model as a citable fact.
+  - **8.3 Docs** (README): the new view and pin/mute, leave-by and outdoor-rain rules, environment variable table, time zone, lockout,
+    token for a display on another device, no stack traces.
+  Not done:
+  - **Rules editor as a separate screen.** The existing three word lists plus the new view cover the plan's "rules editor"; a richer
+    editor (per-calendar rules, time windows, test-a-word preview) was not built.
+  - **Leave-by and rain are not shown on the mirror as separate elements.** They are facts for the brief: the model phrases them, and
+    the display shows them as notes (with the urgency/time from Phase 6). "Conflict warnings on the mirror" are the same: they appear
+    as high-urgency notes. There is no dedicated widget.
+  - **Leave-by for every event with a location.** It still needs an event hint rule with an address (an existing mechanism). Without
+    it there is no leave-by, by design: guessing a route for any address string would produce wrong departure times.
+  - **Preview brief now.** `Force Context Refresh` already existed; a preview that does not store anything was not added.
+  - **Not verified:** the whole remote UI page (the new panel was rendered in isolation with the real component and backend, not
+    inside the full settings page); real routing/forecast providers (mocks and unit tests only); the live display.
+  Known limits:
+  - Mute/Pin match by TITLE words, so muting "Yoga" also hides every other event with "Yoga" in its title. The README says so.
+  - The explain view uses the calendar cache as it is: after a rule change the list reloads from it at once, but the brief itself is
+    rebuilt in the background (a few seconds, plus a model call when the dossier changed).
+  - The outdoor words are German and English only.
 

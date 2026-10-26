@@ -317,11 +317,21 @@ Treat a subscription link like a password: anyone with it can read the calendar.
 
 Under **Integrations > LLM Context** you can add words for three lists: always show, never show, and repeating events that count as routine. Matching ignores upper/lower case and accents (`Fußball` finds `fussball`). Schedule changes (Ersatz, entfällt, verschoben, cancelled, moved) and doctor or therapy appointments are always shown, even when they repeat, unless you list a word from them under "never show".
 
+**Why is this shown?** Below the word lists, the same page lists every upcoming event of the next days with the rule that decided it, in plain words ("Hidden: a repeating routine entry", "Shown: it looks like a doctor or therapy appointment", "Its calendar is not part of the brief"). Each row has a button: **Mute** adds the event title to *never show*, **Pin** adds it to *always show*. Pinning an event that a *never show* word is hiding removes that word, because *never show* wins over *always show* and the pin would otherwise do nothing; the page tells you which word was removed. Events from a calendar that is not part of the brief cannot be pinned (change the *Brief calendars* setting instead). The buttons only change the word lists, so you can see and edit the result there. Muting by title also hides other events with the same words in their title.
+
+If the household members have calendars assigned, two appointments in different people's calendars are not reported as colliding. Without any assignment every overlap is reported.
+
+
+
 ## How the AI notes are made
 
 The mirror's notes are built in two steps so the AI cannot invent anything:
 
 1. **Mirrorial works out the facts itself:** what is on today and tomorrow, overlapping appointments, little time between two places, schedule changes, medical appointments without a location, an early start tomorrow, a busy day, leave-by times and rain on days someone leaves the house. Calendar text is treated as data, never as instructions.
+
+   Two of these are deliberately careful:
+   - **Leave-by times** exist only for events that have an *event hint rule* with an address (Integrations > LLM Context), and only when a routing provider answered. A duration that is just a straight-line guess is shown as a rough estimate and never turned into "leave at 10:30". When the departure time has already passed but the appointment has not started, the note says "leave now"; once it has started, nothing is said.
+   - **Rain at an outdoor plan.** An event with words like barbecue/grillen, picnic, zoo, park, Spielplatz, Wanderung gets its own warning when rain or snow is forecast for that day. The forecast is for the whole day at home, not for the hour of the event, so the note says "forecast for today". It replaces the general weather note for that day. Clear weather gives no note.
 2. **The AI only phrases them.** Each note has to name the facts it is based on. Notes that cite nothing, contain a link, or mention a time, duration or temperature that is not in those facts are discarded. Overlaps, schedule changes and tight transitions the AI left out are added by Mirrorial itself, so they cannot go missing, even when the AI provider is down.
 
 On a quiet day there is nothing to say and the AI is not called. In the evening (from 18:00) the focus moves to tomorrow. Under **Integrations > LLM Context** the *Brief engine* can be switched back to the previous engine for one release.
@@ -345,6 +355,25 @@ The backend API is protected by an access token.
 - **Lost token.** Read the file on the Pi, or delete it and restart the backend to generate a new one.
 - **Stored keys.** An API key (LLM, routing) is only sent to the endpoint it was entered for. If you change the provider or base URL, enter the key again. The Home Assistant token is never sent to the browser. The UI shows only whether one is stored.
 - **Outbound URLs.** LLM, Home Assistant and calendar URLs must be `http(s)`, may not contain credentials, and may not point to link-local/cloud-metadata addresses.
+- **Wrong tokens.** After 10 wrong tokens from one address within 5 minutes that address is blocked for a while, even with the right token.
+- **Errors.** A request that cannot be read (broken JSON, too large) is answered with a short JSON message, never with a stack trace.
+- **A display on another device.** It needs the token: build it with `--dart-define=DISPLAY_ACCESS_TOKEN=...` or start it with `MIRRORIAL_ACCESS_TOKEN` set. The token is deliberately not read from `config.json`, which the remote UI can read.
+
+### Environment variables
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `PORT` | Backend port | `3000` |
+| `MIRRORIAL_ACCESS_TOKEN` | Access token (min. 16 characters) | generated, stored in `~/.config/mirrorial/access-token` |
+| `MIRRORIAL_TRUST_LOCAL` | `false` = even requests from this machine need the token | `true` |
+| `MIRRORIAL_ALLOWED_ORIGINS` | Extra browser origins (comma separated) allowed to call the API, e.g. the host name the remote UI is served from | none |
+| `MIRRORIAL_DATA_DIR` | Where secrets, caches and the household file are kept | `~/.config/mirrorial` |
+| `MIRRORIAL_CONFIG_PATH` | Location of `config.json` | `config.json` in the project root |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | Optional defaults for the direct Google connection | none |
+
+### Time zone
+
+`system.timezone` empty or `auto` means the time zone of the device. The old default `UTC` also means the device's zone on a device that is not set to UTC (write `Etc/UTC` if you really want UTC). Set the zone of the Pi itself (`timedatectl set-timezone Europe/Berlin`): "today" and "tomorrow" in the brief follow it.
 
 
 ## Developer

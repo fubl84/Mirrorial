@@ -50,8 +50,26 @@ const buildWeatherFact = ({ forecast, bucket, day }) => {
   };
 };
 
+// Rain or snow forecast for the day of an outdoor plan. The forecast is for the whole day at home, not for the
+// hour of the event, so the wording says "forecast for today/tomorrow" and not "it will rain at 15:00".
+const buildOutdoorWeatherFact = ({ forecast, bucket, day, event }) => {
+  if (!forecast || !NOTABLE_WEATHER_BUCKETS.has(bucket) || !forecast.label) {
+    return null;
+  }
+  const title = `${event?.title || ''}`.replace(/\s+/g, ' ').trim().slice(0, 50);
+  const action = bucket === 'snow' ? 'Dress warmly or plan an alternative.' : 'Plan an alternative or take rain gear.';
+  return {
+    eventId: event.id,
+    kind: 'weather',
+    text: `"${title}" is outdoors and the forecast for ${day} is ${forecast.label}. ${action}`,
+    params: { bucket, day },
+    source: 'weather',
+  };
+};
+
 module.exports = {
   buildBirthdayFact,
+  buildOutdoorWeatherFact,
   buildWeatherFact,
   classifyContextFactKind,
   contextFactsFromStrings,

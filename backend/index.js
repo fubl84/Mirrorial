@@ -71,6 +71,7 @@ const {
 } = require('./src/calendar/icsMeta');
 const { applyRuleAction, hasMedicalSignal, normalizeContextRules } = require('./src/brief/rules');
 const { explainEvents } = require('./src/brief/explain');
+const { buildLeaveByStatements } = require('./src/brief/leaveBy');
 const { HOUSEHOLD_EVENT_PATTERNS, RECURRING_ALWAYS_KEEP_PATTERNS } = require('./src/brief/householdPatterns');
 
 const app = express();
@@ -6012,7 +6013,6 @@ const buildEventHintRouteFacts = async ({
   }
 
   const travelMinutes = Math.max(1, Math.round(route.durationMinutes));
-  const leaveByTimestamp = timing.startMs - ((travelMinutes + arrivalBufferMinutes) * 60000);
   const routeModeLabel = mode === 'public_transport'
     ? 'public transport'
     : mode;
@@ -6026,13 +6026,19 @@ const buildEventHintRouteFacts = async ({
     ]).slice(0, 3)
     : [];
 
+  // The check that used to be here (`leaveByTimestamp > 0`) compared against 1970 and never held anything back:
+  // a departure time that had already passed was stated as if it were still ahead, and a straight-line guess
+  // was turned into "Leave around 10:30". See src/brief/leaveBy.js for the rules.
   const addedFacts = uniqueTexts([
-    `Estimated ${routeModeLabel} from ${originLabel} to ${destinationLabel} takes about ${travelMinutes} min.`,
-    leaveByTimestamp > 0
-      ? (arrivalBufferMinutes > 0
-        ? `Leave around ${formatEventHintClockTime(leaveByTimestamp, config)} to arrive about ${arrivalBufferMinutes} min early.`
-        : `Leave around ${formatEventHintClockTime(leaveByTimestamp, config)} for on-time arrival.`)
-      : '',
+    ...buildLeaveByStatements({
+      route,
+      startMs: timing.startMs,
+      arrivalBufferMinutes,
+      modeLabel: routeModeLabel,
+      originLabel,
+      destinationLabel,
+      formatClock: (ms) => formatEventHintClockTime(ms, config),
+    }),
     transitLines.length > 0 ? `Transit lines mention: ${transitLines.join(', ')}.` : '',
   ]);
 
