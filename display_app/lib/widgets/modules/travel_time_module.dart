@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../layout/layout_helpers.dart';
 import '../../services/display_preferences.dart';
 import '../../services/travel_time_service.dart';
+import '../stale_badge.dart';
 
 class TravelTimeModule extends ConsumerWidget {
   final Map config;
@@ -13,29 +16,42 @@ class TravelTimeModule extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final service = ref.watch(travelTimeServiceProvider);
     final items = (config['items'] as List? ?? []);
     final locale = resolveDisplayLocale(rootConfig);
     final use24HourFormat = resolveUse24HourFormat(config, rootConfig);
 
-    return StreamBuilder<TravelTimeSnapshot>(
-      stream: service.watchItems(items),
-      builder: (context, snapshot) {
-        final travelSnapshot = snapshot.data ?? TravelTimeSnapshot(updatedAt: null, items: const <TravelTimeItem>[]);
+    // One polling loop per route list. Before, `service.watchItems(items)` ran inside build(), so every rebuild
+    // started a new loop and a new request, and the old loop was never stopped.
+    final polled = ref.watch(travelTimeProvider(jsonEncode(items)));
+
+    return polled.when(
+      loading: () => const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
+      error: (error, stackTrace) => const Icon(Icons.error_outline, color: Colors.red),
+      data: (result) {
+        final travelSnapshot = result.value;
         final routes = travelSnapshot.items;
         if (routes.isEmpty) {
-          return Align(
-            alignment: Alignment.topLeft,
-            child: Text(
-              'Configure Travel Time routes in the Remote UI.',
-              style: Theme.of(context).textTheme.bodyMedium,
+          return StaleBadge(
+            stale: result.stale,
+            locale: locale,
+            use24HourFormat: use24HourFormat,
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: Text(
+                'Configure Travel Time routes in the Remote UI.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
             ),
           );
         }
 
         final density = layoutData?.density ?? ModuleVisualDensity.medium;
 
-        return LayoutBuilder(
+        return StaleBadge(
+          stale: result.stale,
+          locale: locale,
+          use24HourFormat: use24HourFormat,
+          child: LayoutBuilder(
           builder: (context, constraints) {
             final width = constraints.maxWidth.isFinite ? constraints.maxWidth : (layoutData?.bounds.width ?? 320);
             final height = constraints.maxHeight.isFinite ? constraints.maxHeight : (layoutData?.bounds.height ?? 180);
@@ -89,7 +105,7 @@ class TravelTimeModule extends ConsumerWidget {
               ),
             );
           },
-        );
+        ));
       },
     );
   }

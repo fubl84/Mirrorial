@@ -5603,6 +5603,7 @@ const selectContextBrief = (deterministicBrief, llm) => {
     bullets: Array.isArray(llm.brief.bullets) ? llm.brief.bullets : deterministicBrief.bullets,
     householdView: typeof llm.brief.householdView === 'string' ? llm.brief.householdView : deterministicBrief.householdView,
     items: buildBriefItemsFromBrief(llm.brief),
+    notes: Array.isArray(llm.brief.notes) ? llm.brief.notes : [],
     source: 'llm',
   };
 };

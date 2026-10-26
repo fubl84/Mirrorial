@@ -114,5 +114,37 @@ test('at most four notes are returned and generated ones come first within the s
 test('assembleBrief keeps all notes as bullets when none is urgent', () => {
   const dossier = { locale: 'en', focus: 'tomorrow' };
   const brief = assembleBrief({ dossier, bullets: [{ text: 'A', urgency: 'normal' }, { text: 'B', urgency: 'low' }] });
-  assert.deepEqual(brief, { headline: 'Tomorrow', bullets: ['A', 'B'], householdView: '', priority: 'normal' });
+  assert.deepEqual(brief, {
+    headline: 'Tomorrow',
+    bullets: ['A', 'B'],
+    householdView: '',
+    priority: 'normal',
+    notes: [{ text: 'A', urgency: 'normal', time: '' }, { text: 'B', urgency: 'low', time: '' }],
+  });
+});
+
+test('assembleBrief gives every note its urgency and the start time of the event it is about', () => {
+  const dossier = {
+    locale: 'de',
+    focus: 'today',
+    events: [
+      { ref: 'e1', when: '11:00-12:00' },
+      { ref: 'e2', when: 'all day' },
+    ],
+  };
+  const brief = assembleBrief({
+    dossier,
+    bullets: [
+      { text: 'Kollision', urgency: 'high', events: ['e1'] },
+      { text: 'Feiertag', urgency: 'low', events: ['e2'] },
+      { text: 'Ohne Termin', urgency: 'normal', events: [] },
+    ],
+  });
+  assert.equal(brief.householdView, 'Kollision');
+  assert.deepEqual(brief.bullets, ['Feiertag', 'Ohne Termin']);
+  assert.deepEqual(brief.notes, [
+    { text: 'Kollision', urgency: 'high', time: '11:00' },
+    { text: 'Feiertag', urgency: 'low', time: '' },
+    { text: 'Ohne Termin', urgency: 'normal', time: '' },
+  ]);
 });

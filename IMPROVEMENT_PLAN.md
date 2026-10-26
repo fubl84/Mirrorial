@@ -255,7 +255,34 @@ Gaps to close:
     cover them either). Windows zone names ("W. Europe Standard Time") are not mapped and keep the old behaviour.
   - Coalescing state is in memory: a restart forgets a queued follow-up (the next display poll starts a new one).
   - Forced refresh (`/api/debug/daily-brief/rebuild`) still calls the model by design.
-- [ ] Phase 6
+- [x] Phase 6 – display app. `flutter analyze` clean, 29 Dart tests + 293 backend tests green. Live run of the real `BackendClient`
+  against the real backend (mock calendar/model): without token on the local machine, with `MIRRORIAL_TRUST_LOCAL=false` no token and
+  a wrong token -> auth error, right token -> ok; unreachable backend -> error in ~10 ms.
+  - **`BackendClient`** (`lib/services/backend_client.dart`): one client for context, calendar, travel time and the status report.
+    10 s timeout on every request, `Authorization: Bearer` when a token is set, UTF-8 decoding, one error type (`BackendException`,
+    `isAuthError` for 401/403 with a message that says "token"). The base-URL function existed three times and is now one.
+    Token only from `--dart-define=DISPLAY_ACCESS_TOKEN=...` or the `MIRRORIAL_ACCESS_TOKEN` environment variable, never from
+    `config.json` (the remote UI can read it). The Pi display talks to 127.0.0.1 and needs none.
+  - **Keep last good data** (`lib/services/polling.dart`): before, any failure (HTTP error, timeout, bad JSON) became an empty
+    calendar / empty brief / no routes, so one hiccup blanked the card and the birthday overlay. Now a failed poll changes nothing.
+    After 2 min of failures the last good data is shown again with a small "Data from 09:15" / "Stand 09:15" mark (top right,
+    cloud-off icon); with no data ever loaded, "No connection". Retry after 15 s, then 30 s, 1 min ... up to 10 min; one success
+    resets it. Works for calendar, brief and travel time.
+  - **Travel module polled on every rebuild:** `StreamBuilder(stream: service.watchItems(items))` inside `build()` started a new loop
+    and a new request per rebuild, and never stopped the old one. Now a keyed `autoDispose` provider: one loop per route list.
+  - **Brief card** (6.3): the backend adds `brief.notes = [{text, urgency, time}]` (the same lines as `householdView` + `bullets`).
+    The display colours the bullet (amber = high, dim = low) and prefixes the start time of the appointment the note is about
+    ("11:00  ..."). Old backend / deterministic brief / trip line: no `notes`, rendering exactly as before (tested).
+  Known limits / open:
+  - NOT run on the Pi (flutter-pi) or on a real screen. The widgets compile and the logic is tested, but nobody has looked at how the
+    stale mark and the time prefix sit in the real layout (the mark overlays the top-right corner of the module and could cover the
+    first line of a very small module). No widget tests.
+  - Weather (Open-Meteo/OpenWeather) and Home Assistant (WebSocket) still use their own HTTP code: they talk to third parties, not to
+    the backend, and were left alone. They still turn failures into "nothing" (weather) - same pattern, not fixed here.
+  - `notes` are matched to lines by their text. If the backend later rewrites a line (German headline translation does not touch
+    bullets, but would), the line simply shows without urgency/time.
+  - The access token for a display on another device has to be provided at build time or in the process environment; there is no
+    UI for it.
 - [ ] Phase 7
 - [ ] Phase 8
 

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../layout/layout_helpers.dart';
 import '../../services/context_service.dart';
 import '../../services/display_preferences.dart';
+import '../stale_badge.dart';
 
 class DailyBriefModule extends ConsumerWidget {
   final Map config;
@@ -50,18 +51,23 @@ class DailyBriefModule extends ConsumerWidget {
                 ? '${translateDisplayLabel('updated', locale)} ${formatClockTime(DateTime.parse(snapshot.updatedAt!).toLocal(), locale, use24HourFormat: use24HourFormat)}'
                 : null;
 
-            return _BriefPager(
-              pages: pages,
-              footer: _buildTripLocalTimeFooter(
-                snapshot.activeTrip,
-                snapshot.updatedAt,
-                locale,
-                use24HourFormat,
+            return StaleBadge(
+              stale: snapshot.stale,
+              locale: locale,
+              use24HourFormat: use24HourFormat,
+              child: _BriefPager(
+                pages: pages,
+                footer: _buildTripLocalTimeFooter(
+                  snapshot.activeTrip,
+                  snapshot.updatedAt,
+                  locale,
+                  use24HourFormat,
+                ),
+                updatedLabel: updatedLabel,
+                emptyLabel: translateDisplayLabel('no_brief', locale),
+                density: density,
+                pageSeconds: ((config['pageSeconds'] as num?)?.toInt() ?? 10).clamp(5, 30),
               ),
-              updatedLabel: updatedLabel,
-              emptyLabel: translateDisplayLabel('no_brief', locale),
-              density: density,
-              pageSeconds: ((config['pageSeconds'] as num?)?.toInt() ?? 10).clamp(5, 30),
             );
           },
         );
@@ -110,12 +116,13 @@ class DailyBriefModule extends ConsumerWidget {
     final householdView = snapshot.brief.householdView.trim();
     final tripLine = _buildTripLine(snapshot.activeTrip, locale);
     final showTripLine = includeTripLine && tripLine.isNotEmpty && tripLine != householdView;
+    final notes = snapshot.brief.notes;
     final items = <_BriefItem>[
-      if (householdView.isNotEmpty) _BriefItem(type: _BriefItemType.primary, text: householdView),
+      if (householdView.isNotEmpty) _annotatedItem(_BriefItemType.primary, householdView, notes),
       if (showTripLine) _BriefItem(type: _BriefItemType.secondary, text: tripLine),
       ...snapshot.brief.bullets
           .where((bullet) => bullet.trim().isNotEmpty)
-          .map((bullet) => _BriefItem(type: _BriefItemType.bullet, text: bullet)),
+          .map((bullet) => _annotatedItem(_BriefItemType.bullet, bullet, notes)),
     ];
 
     return _chunkItems(items, pageSize)
@@ -308,7 +315,7 @@ class _BriefPage extends StatelessWidget {
                     width: 6,
                     height: 6,
                     decoration: BoxDecoration(
-                      color: Theme.of(context).iconTheme.color,
+                      color: _urgencyDotColor(item.urgency, Theme.of(context).iconTheme.color),
                       shape: BoxShape.circle,
                     ),
                   ),
@@ -316,15 +323,26 @@ class _BriefPage extends StatelessWidget {
                 const SizedBox(width: 10),
               ],
               Expanded(
-                child: Text(
-                  item.text,
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      // The start time of the appointment the note is about, so it can be read at a glance.
+                      if (item.time.isNotEmpty)
+                        TextSpan(
+                          text: '${item.time}  ',
+                          style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white70),
+                        ),
+                      TextSpan(text: item.text),
+                    ],
+                  ),
                   maxLines: isPrimary ? (density == ModuleVisualDensity.compact ? 2 : 3) : (isSecondary ? 2 : 2),
                   overflow: TextOverflow.ellipsis,
-                  style: isPrimary
-                      ? Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600)
-                      : (isSecondary
-                          ? Theme.of(context).textTheme.bodyMedium
-                          : Theme.of(context).textTheme.bodyLarge),
+                  style: (isPrimary
+                          ? Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600)
+                          : (isSecondary
+                              ? Theme.of(context).textTheme.bodyMedium
+                              : Theme.of(context).textTheme.bodyLarge))
+                      ?.copyWith(color: item.urgency == NoteUrgency.low ? Colors.white60 : null),
                 ),
               ),
             ],
@@ -466,11 +484,37 @@ bool _looksLikeAddress(String value) {
       || normalized.contains('street');
 }
 
+/// Bullet colour: amber for things that need action soon or collide, dim for nice-to-know, the theme colour else.
+Color? _urgencyDotColor(NoteUrgency urgency, Color? themeColor) {
+  switch (urgency) {
+    case NoteUrgency.high:
+      return Colors.amberAccent;
+    case NoteUrgency.low:
+      return Colors.white38;
+    case NoteUrgency.normal:
+      return themeColor;
+  }
+}
+
+/// Looks up the urgency and time of a line by its text. Lines the backend did not annotate (older backend,
+/// deterministic brief, trip line) get none and render exactly as before.
+_BriefItem _annotatedItem(_BriefItemType type, String text, List<BriefNote> notes) {
+  final trimmed = text.trim();
+  for (final note in notes) {
+    if (note.text.trim() == trimmed) {
+      return _BriefItem(type: type, text: text, urgency: note.urgency, time: note.time);
+    }
+  }
+  return _BriefItem(type: type, text: text);
+}
+
 class _BriefItem {
   final _BriefItemType type;
+  final NoteUrgency urgency;
+  final String time;
   final String text;
 
-  const _BriefItem({required this.type, required this.text});
+  const _BriefItem({required this.type, required this.text, this.urgency = NoteUrgency.normal, this.time = ''});
 }
 
 class _BriefPageData {

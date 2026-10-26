@@ -1,7 +1,7 @@
-import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
+import 'backend_client.dart';
 import 'config_service.dart';
+import 'polling.dart';
 
 class CalendarEvent {
   final String id;
@@ -51,53 +51,39 @@ DateTime _parseCalendarDate(dynamic rawValue, {required bool isAllDay}) {
   return parsed.isUtc ? parsed.toLocal() : parsed.toLocal();
 }
 
-String _resolveBackendBaseUrl(Map<String, dynamic>? config) {
-  const envBaseUrl = String.fromEnvironment('DISPLAY_API_BASE');
-  final configuredBaseUrl = config?['system']?['backendUrl'] as String?;
-  final baseUrl = (configuredBaseUrl != null && configuredBaseUrl.trim().isNotEmpty)
-      ? configuredBaseUrl.trim()
-      : (envBaseUrl.isNotEmpty ? envBaseUrl : 'http://127.0.0.1:3000');
-
-  return baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
-}
-
 class CalendarService {
   final Ref ref;
 
   CalendarService(this.ref);
 
+  /// Throws [BackendException] when the backend cannot be reached or refuses: a failed fetch is NOT an empty
+  /// calendar, and must never replace the events that are on screen.
   Future<List<CalendarEvent>> fetchEvents() async {
     final config = ref.read(configStreamProvider).value;
-    final baseUrl = _resolveBackendBaseUrl(config);
-    final response = await http.get(Uri.parse('$baseUrl/api/display/calendar/events'));
-
-    if (response.statusCode != 200) {
-      return [];
-    }
-
-    final payload = jsonDecode(response.body) as Map<String, dynamic>;
-    final items = payload['events'] as List? ?? [];
+    final payload = await ref.read(backendClientProvider).getJson(
+          resolveBackendBaseUrl(config),
+          '/api/display/calendar/events',
+        );
+    final items = (payload is Map ? payload['events'] : null) as List? ?? [];
     return items
         .whereType<Map>()
         .map((item) => CalendarEvent.fromJson(item.cast<String, dynamic>()))
         .toList();
   }
 
-  Stream<List<CalendarEvent>> watchEvents() async* {
-    while (true) {
-      try {
-        yield await fetchEvents();
-      } catch (_) {
-        yield [];
-      }
-      await Future<void>.delayed(const Duration(minutes: 5));
-    }
+  Stream<PollResult<List<CalendarEvent>>> watchEvents() {
+    return pollWithLastGood<List<CalendarEvent>>(
+      fetch: fetchEvents,
+      interval: () => const Duration(minutes: 5),
+      placeholder: () => const <CalendarEvent>[],
+    );
   }
 }
 
 final calendarServiceProvider = Provider((ref) => CalendarService(ref));
 
-final calendarEventsProvider = StreamProvider.autoDispose<List<CalendarEvent>>((ref) {
+/// Events plus, when the backend has been unreachable for a while, the mark "these are old".
+final calendarEventsProvider = StreamProvider.autoDispose<PollResult<List<CalendarEvent>>>((ref) {
   final service = ref.watch(calendarServiceProvider);
   return service.watchEvents();
 });

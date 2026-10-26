@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import '../../layout/layout_helpers.dart';
 import '../../services/calendar_service.dart';
 import '../../services/display_preferences.dart';
+import '../stale_badge.dart';
 
 class CalendarModule extends ConsumerWidget {
   final Map config;
@@ -26,15 +27,23 @@ class CalendarModule extends ConsumerWidget {
     final viewMode = config['viewMode']?.toString() == 'day_cards' ? 'day_cards' : 'list';
 
     return eventsAsync.when(
-      data: (events) {
+      data: (result) {
+        final events = result.value;
+        Widget marked(Widget child) => StaleBadge(
+              stale: result.stale,
+              locale: locale,
+              use24HourFormat: use24HourFormat,
+              child: child,
+            );
+
         if (events.isEmpty) {
-          return Text(
+          return marked(Text(
             translateDisplayLabel('no_upcoming_events', locale),
             style: Theme.of(context).textTheme.bodyMedium,
-          );
+          ));
         }
 
-        return LayoutBuilder(
+        return marked(LayoutBuilder(
           builder: (context, constraints) {
             final perDayWidth = constraints.maxWidth / math.max(1, _resolveDayCount(config));
             final canUseDayCards = viewMode == 'day_cards'
@@ -61,7 +70,7 @@ class CalendarModule extends ConsumerWidget {
               use24HourFormat: use24HourFormat,
             );
           },
-        );
+        ));
       },
       loading: () => const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
       error: (e, st) => const Icon(Icons.error_outline, color: Colors.red),

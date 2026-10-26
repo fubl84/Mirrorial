@@ -10,7 +10,17 @@ const HEADLINES = {
   en: { today: 'Today', tomorrow: 'Tomorrow' },
 };
 
+// "11:00" of the first event a note is about (24 h, local time of the mirror), '' for all-day or unknown.
+const noteTime = (bullet, dossier) => {
+  const ref = (bullet.events || [])[0];
+  const event = (dossier.events || []).find((entry) => entry.ref === ref);
+  const match = /^(\d{2}:\d{2})/.exec(event?.when || '');
+  return match ? match[1] : '';
+};
+
 // The top note is shown prominently (householdView) when it is urgent; everything else is a plain bullet.
+// `notes` repeats the same texts with urgency and time so the display can mark them. Displays that do not know
+// it keep using householdView and bullets.
 const assembleBrief = ({ bullets, dossier }) => {
   const [lead, ...rest] = bullets;
   const promoteLead = lead && lead.urgency === 'high';
@@ -19,6 +29,11 @@ const assembleBrief = ({ bullets, dossier }) => {
     bullets: (promoteLead ? rest : bullets).map((bullet) => bullet.text),
     householdView: promoteLead ? lead.text : '',
     priority: bullets.some((bullet) => bullet.urgency === 'high') ? 'high' : 'normal',
+    notes: bullets.map((bullet) => ({
+      text: bullet.text,
+      urgency: bullet.urgency || 'normal',
+      time: noteTime(bullet, dossier),
+    })),
   };
 };
 

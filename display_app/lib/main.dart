@@ -2,8 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:http/http.dart' as http;
 import 'package:intl/date_symbol_data_local.dart';
+import 'services/backend_client.dart';
 import 'services/config_service.dart';
 import 'services/context_service.dart';
 import 'services/event_bus.dart';
@@ -120,16 +120,16 @@ class MirrorialApp extends ConsumerWidget {
   }
 }
 
-class _DisplayStatusReporter extends StatefulWidget {
+class _DisplayStatusReporter extends ConsumerStatefulWidget {
   final Map<String, dynamic> config;
 
   const _DisplayStatusReporter({required this.config});
 
   @override
-  State<_DisplayStatusReporter> createState() => _DisplayStatusReporterState();
+  ConsumerState<_DisplayStatusReporter> createState() => _DisplayStatusReporterState();
 }
 
-class _DisplayStatusReporterState extends State<_DisplayStatusReporter> {
+class _DisplayStatusReporterState extends ConsumerState<_DisplayStatusReporter> {
   String? _lastSignature;
 
   @override
@@ -149,19 +149,12 @@ class _DisplayStatusReporterState extends State<_DisplayStatusReporter> {
   }
 
   Future<void> _reportStatus(Size size, double devicePixelRatio) async {
-    final backendUrl = (widget.config['system']?['backendUrl'] as String?)?.trim();
-    final baseUrl = (backendUrl != null && backendUrl.isNotEmpty) ? backendUrl : 'http://127.0.0.1:3000';
-    final normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
-
-    try {
-      await http.post(
-        Uri.parse('$normalizedBaseUrl/api/display/status'),
-        headers: {'content-type': 'application/json'},
-        body: '{"width":${size.width.round()},"height":${size.height.round()},"devicePixelRatio":$devicePixelRatio}',
-      );
-    } catch (_) {
-      // Best-effort only. The display keeps working if the status endpoint is unavailable.
-    }
+    // Best effort only: the display keeps working if the status endpoint is unavailable.
+    await ref.read(backendClientProvider).postQuietly(
+      resolveBackendBaseUrl(widget.config),
+      '/api/display/status',
+      {'width': size.width.round(), 'height': size.height.round(), 'devicePixelRatio': devicePixelRatio},
+    );
   }
 }
 

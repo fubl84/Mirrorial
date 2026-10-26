@@ -1,8 +1,40 @@
-import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
+import 'backend_client.dart';
 import 'config_service.dart';
 import 'display_preferences.dart';
+import 'polling.dart';
+
+/// How important a note is. Older backends send no urgency; those notes count as [normal].
+enum NoteUrgency { high, normal, low }
+
+NoteUrgency parseNoteUrgency(Object? value) {
+  switch (value?.toString()) {
+    case 'high':
+      return NoteUrgency.high;
+    case 'low':
+      return NoteUrgency.low;
+    default:
+      return NoteUrgency.normal;
+  }
+}
+
+/// One line of the brief with its urgency and, when it is about a timed appointment, that start time ("11:00").
+class BriefNote {
+  final String text;
+  final NoteUrgency urgency;
+  final String time;
+
+  const BriefNote({required this.text, this.urgency = NoteUrgency.normal, this.time = ''});
+
+  factory BriefNote.fromJson(Map<String, dynamic> json) {
+    final time = json['time']?.toString() ?? '';
+    return BriefNote(
+      text: json['text']?.toString() ?? '',
+      urgency: parseNoteUrgency(json['urgency']),
+      time: RegExp(r'^\d{2}:\d{2}$').hasMatch(time) ? time : '',
+    );
+  }
+}
 
 class BriefCard {
   final String id;
@@ -37,12 +69,17 @@ class DailyBrief {
   final List<BriefCard> items;
   final String source;
 
+  /// The same lines as householdView + bullets, with urgency and time. Empty when the backend is older than this
+  /// field; the display then falls back to householdView and bullets.
+  final List<BriefNote> notes;
+
   DailyBrief({
     required this.headline,
     required this.bullets,
     required this.householdView,
     required this.items,
     required this.source,
+    this.notes = const [],
   });
 
   factory DailyBrief.fromJson(Map<String, dynamic> json) {
@@ -55,6 +92,11 @@ class DailyBrief {
           .map((item) => BriefCard.fromJson(item.cast<String, dynamic>()))
           .toList(),
       source: json['source']?.toString() ?? 'deterministic',
+      notes: (json['notes'] as List? ?? [])
+          .whereType<Map>()
+          .map((item) => BriefNote.fromJson(item.cast<String, dynamic>()))
+          .where((note) => note.text.trim().isNotEmpty)
+          .toList(),
     );
   }
 }
@@ -146,12 +188,24 @@ class ContextSnapshot {
   final TripContext? activeTrip;
   final BirthdayContext? birthdayContext;
 
+  /// Set when the backend has been unreachable for a while: everything above is the last good data.
+  final StaleInfo? stale;
+
   ContextSnapshot({
     required this.updatedAt,
     required this.brief,
     required this.activeTrip,
     required this.birthdayContext,
+    this.stale,
   });
+
+  ContextSnapshot withStale(StaleInfo? info) => ContextSnapshot(
+        updatedAt: updatedAt,
+        brief: brief,
+        activeTrip: activeTrip,
+        birthdayContext: birthdayContext,
+        stale: info,
+      );
 
   factory ContextSnapshot.fromJson(Map<String, dynamic> json) {
     final briefJson = json['brief'] is Map ? (json['brief'] as Map).cast<String, dynamic>() : <String, dynamic>{};
@@ -167,54 +221,39 @@ class ContextSnapshot {
   }
 }
 
-String _resolveBackendBaseUrl(Map<String, dynamic>? config) {
-  const envBaseUrl = String.fromEnvironment('DISPLAY_API_BASE');
-  final configuredBaseUrl = config?['system']?['backendUrl'] as String?;
-  final baseUrl = (configuredBaseUrl != null && configuredBaseUrl.trim().isNotEmpty)
-      ? configuredBaseUrl.trim()
-      : (envBaseUrl.isNotEmpty ? envBaseUrl : 'http://127.0.0.1:3000');
-
-  return baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
-}
+ContextSnapshot _emptySnapshot() => ContextSnapshot(
+      updatedAt: null,
+      brief: DailyBrief(headline: 'Daily brief', bullets: [], householdView: '', items: const [], source: 'deterministic'),
+      activeTrip: null,
+      birthdayContext: null,
+    );
 
 class ContextService {
   final Ref ref;
 
   ContextService(this.ref);
 
+  /// Throws [BackendException] on any failure. An error is no longer turned into an empty brief: that blanked the
+  /// card (and the birthday overlay) on every hiccup.
   Future<ContextSnapshot> fetchSnapshot() async {
     final config = ref.read(configStreamProvider).value;
-    final baseUrl = _resolveBackendBaseUrl(config);
-    final locale = resolveDisplayLocale(config);
-    final response = await http.get(Uri.parse('$baseUrl/api/display/context?locale=$locale'));
-
-    if (response.statusCode != 200) {
-      return ContextSnapshot(
-        updatedAt: null,
-        brief: DailyBrief(headline: 'Daily brief', bullets: [], householdView: '', items: const [], source: 'deterministic'),
-        activeTrip: null,
-        birthdayContext: null,
-      );
+    final payload = await ref.read(backendClientProvider).getJson(
+          resolveBackendBaseUrl(config),
+          '/api/display/context',
+          query: {'locale': resolveDisplayLocale(config)},
+        );
+    if (payload is! Map) {
+      throw const BackendException('The backend answer had an unexpected shape.');
     }
-
-    final payload = jsonDecode(response.body) as Map<String, dynamic>;
-    return ContextSnapshot.fromJson(payload);
+    return ContextSnapshot.fromJson(payload.cast<String, dynamic>());
   }
 
-  Stream<ContextSnapshot> watchSnapshot() async* {
-    while (true) {
-      try {
-        yield await fetchSnapshot();
-      } catch (_) {
-        yield ContextSnapshot(
-          updatedAt: null,
-          brief: DailyBrief(headline: 'Daily brief', bullets: [], householdView: '', items: const [], source: 'deterministic'),
-          activeTrip: null,
-          birthdayContext: null,
-        );
-      }
-      await Future<void>.delayed(const Duration(minutes: 5));
-    }
+  Stream<ContextSnapshot> watchSnapshot() {
+    return pollWithLastGood<ContextSnapshot>(
+      fetch: fetchSnapshot,
+      interval: () => const Duration(minutes: 5),
+      placeholder: _emptySnapshot,
+    ).map((result) => result.stale == null ? result.value : result.value.withStale(result.stale));
   }
 }
 
