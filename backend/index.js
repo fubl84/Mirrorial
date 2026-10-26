@@ -40,7 +40,20 @@ const { pickWindowEvents } = require('./src/brief/dossier');
 const { checkLlmPreconditions } = require('./src/brief/gate');
 const { getBriefFocus } = require('./src/brief/dossier');
 const { buildLlmResult, buildSkippedResult } = require('./src/brief/result');
-const { COMPOSER_JSON_SCHEMA } = require('./src/brief/composer');
+const { COMPOSER_JSON_SCHEMA, COMPOSER_SYSTEM_PROMPT } = require('./src/brief/composer');
+const { decideLlmReuse, fingerprintDossier } = require('./src/brief/freshness');
+const { getConflictPredicate } = require('./src/brief/people');
+const { keepPreviousOnError } = require('./src/calendar/merge');
+const { expandRecurrence } = require('./src/calendar/recurrence');
+const { createCoalescedRunner } = require('./src/runtime/coalesce');
+const { writeJsonFileAtomic } = require('./src/runtime/atomicWrite');
+const {
+  getEventDayKey: getZonedEventDayKey,
+  getLocalDateKey,
+  getSystemTimeZone,
+  resolveTimeZone,
+  zonedWallTimeToMs,
+} = require('./src/time/zone');
 const {
   describeLlmError,
   generateJson,
@@ -101,6 +114,13 @@ const EVENT_HINT_RULE_ROUTE_MODES = new Set(['car', 'bike', 'walk', 'public_tran
 const EVENT_HINT_WEATHER_RULES = new Set(['none', 'warn_rain', 'warn_snow', 'warn_rain_or_snow']);
 const EVENT_HINT_ALT_TRANSPORT_POLICIES = new Set(['always', 'bad_weather', 'tight_schedule', 'manual_note']);
 const EVENT_HINT_ACTIVE_WINDOW_HOURS = 24;
+
+// The time zone of the mirror: config.system.timezone, or the zone of this device when it is empty, "auto", or
+// the old default "UTC" on a device that is not on UTC (see resolveTimeZone). Everything that needs "today",
+// "tomorrow" or "this evening" goes through here instead of reading the config field directly.
+const getConfigTimeZone = (config) => resolveTimeZone(config?.system?.timezone);
+// For code that has no config at hand (event timing helpers). Refreshed by readConfig().
+let runtimeTimeZone = getSystemTimeZone();
 
 const clampLlmTimeoutMs = (value) => Math.min(180000, Math.max(10000, Number(value) || 45000));
 const resolveLlmTimeoutMs = (llmConfig = {}) => clampLlmTimeoutMs((Number(llmConfig.timeoutSeconds) || 45) * 1000);
@@ -796,15 +816,7 @@ const readRuntimeJsonIfExists = async (targetPath, fallbackValue) => {
 const writeJsonAtomic = async (targetPath, payload, options = {}) => {
   await ensureRuntimePaths();
   await fs.ensureDir(path.dirname(targetPath));
-  const tempPath = path.join(
-    path.dirname(targetPath),
-    `.${path.basename(targetPath)}.${process.pid}.${Date.now()}.tmp`,
-  );
-  await fs.writeJson(tempPath, payload, options);
-  await fs.move(tempPath, targetPath, { overwrite: true });
-  if (options.mode) {
-    await fs.chmod(targetPath, options.mode).catch(() => {});
-  }
+  await writeJsonFileAtomic(targetPath, payload, { spaces: options.spaces ?? 2, mode: options.mode });
 };
 
 const readTransportCache = async () => {
@@ -975,7 +987,9 @@ const assertGoogleTokenUsable = (account) => {
 const readConfig = async () => {
   await ensureConfig();
   const rawConfig = await fs.readJson(CONFIG_PATH);
-  return normalizeConfig(rawConfig);
+  const normalized = normalizeConfig(rawConfig);
+  runtimeTimeZone = getConfigTimeZone(normalized);
+  return normalized;
 };
 
 const normalizeHousehold = (rawHousehold = {}) => {
@@ -1056,7 +1070,7 @@ const readSecrets = async () => {
 
 const writeSecrets = async (secrets) => {
   await ensureRuntimePaths();
-  await fs.writeJson(SECRETS_PATH, secrets, { spaces: 2, mode: 0o600 });
+  await writeJsonFileAtomic(SECRETS_PATH, secrets, { spaces: 2, mode: 0o600 });
   await fs.chmod(SECRETS_PATH, 0o600).catch(() => {});
 };
 
@@ -1162,7 +1176,7 @@ const saveConfig = async (rawConfig) => {
   restoreHomeAssistantToken(nextConfig, previousConfig, sameUrlOrigin);
   const { config, secrets } = extractSecretsFromConfig(nextConfig, currentSecrets);
   await writeSecrets(secrets);
-  await fs.writeJson(CONFIG_PATH, config, { spaces: 2, mode: 0o600 });
+  await writeJsonFileAtomic(CONFIG_PATH, config, { spaces: 2, mode: 0o600 });
   await fs.chmod(CONFIG_PATH, 0o600).catch(() => {});
   return sanitizeConfigForClient(config, secrets);
 };
@@ -1208,6 +1222,9 @@ const attachCalendarSourceStatuses = (safeSources, calendarCache) => {
         syncStatus: status?.status || null,
         syncError: status?.error || '',
         syncEventCount: status?.eventCount ?? null,
+        // true = the last sync failed and the events shown are the ones from the last successful sync
+        syncStale: status?.stale === true,
+        syncLastSuccessAt: status?.lastSuccessAt || null,
       };
     }),
   };
@@ -1261,7 +1278,7 @@ const saveCalendarSources = async (rawSources) => {
 
   await writeSecrets(nextSecrets);
   await ensureRuntimePaths();
-  await fs.writeJson(CALENDAR_SOURCES_PATH, { sources: normalizedSources }, { spaces: 2, mode: 0o600 });
+  await writeJsonFileAtomic(CALENDAR_SOURCES_PATH, { sources: normalizedSources }, { spaces: 2, mode: 0o600 });
   await fs.chmod(CALENDAR_SOURCES_PATH, 0o600).catch(() => {});
 
   return sanitizeCalendarSourcesForClient({ sources: normalizedSources }, nextSecrets);
@@ -1479,7 +1496,7 @@ const saveHousehold = async (rawHousehold) => {
 
   await ensureRuntimePaths();
   await writeGeocodeCache(geocodeCache);
-  await fs.writeJson(HOUSEHOLD_PATH, household, { spaces: 2, mode: 0o600 });
+  await writeJsonFileAtomic(HOUSEHOLD_PATH, household, { spaces: 2, mode: 0o600 });
   await fs.chmod(HOUSEHOLD_PATH, 0o600).catch(() => {});
 
   return household;
@@ -1503,7 +1520,7 @@ const getStoredGoogleAccount = async () => readJsonIfExists(GOOGLE_ACCOUNT_PATH,
 
 const writeGoogleAccount = async (account) => {
   await ensureRuntimePaths();
-  await fs.writeJson(GOOGLE_ACCOUNT_PATH, account, { spaces: 2, mode: 0o600 });
+  await writeJsonFileAtomic(GOOGLE_ACCOUNT_PATH, account, { spaces: 2, mode: 0o600 });
   await fs.chmod(GOOGLE_ACCOUNT_PATH, 0o600).catch(() => {});
 };
 
@@ -1699,7 +1716,15 @@ const parseIcsRrule = (value = '') => value.split(';').reduce((rule, segment) =>
     return rule;
   }
   if (key === 'BYDAY') {
-    rule.byDay = normalizedValue.split(',').map((entry) => entry.replace(/^-?\d+/, '').toUpperCase()).filter(Boolean);
+    rule.byDay = normalizedValue.split(',').map((entry) => entry.replace(/^[+-]?\d+/, '').toUpperCase()).filter(Boolean);
+    rule.byDayOrdinals = normalizedValue.split(',')
+      .map((entry) => /^([+-]?\d+)?([A-Za-z]{2})$/.exec(entry.trim()))
+      .filter(Boolean)
+      .map((match) => ({ n: match[1] ? Number.parseInt(match[1], 10) : 0, day: match[2].toUpperCase() }));
+    return rule;
+  }
+  if (key === 'BYMONTHDAY') {
+    rule.byMonthDay = normalizedValue.split(',').map((entry) => Number.parseInt(entry, 10)).filter((day) => Number.isInteger(day) && day !== 0);
     return rule;
   }
   rule[key.toLowerCase()] = normalizedValue;
@@ -1716,16 +1741,41 @@ const ICS_WEEKDAY_TO_INDEX = {
   SA: 6,
 };
 
-const parseIcsDateToDate = (value, isAllDay = false) => {
+const ICS_LOCAL_DATE_TIME = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/;
+
+// `tzid` is the TZID parameter of the property. Only a date-time with a known IANA zone is converted;
+// UTC values (trailing Z), all-day dates and unknown zone names (Outlook's "W. Europe Standard Time") keep
+// the behaviour they had before.
+const parseIcsDateToDate = (value, isAllDay = false, tzid = '') => {
+  const zoned = !isAllDay && tzid ? ICS_LOCAL_DATE_TIME.exec(`${value || ''}`.trim()) : null;
+  if (zoned) {
+    const ms = zonedWallTimeToMs({
+      year: Number(zoned[1]), month: Number(zoned[2]), day: Number(zoned[3]),
+      hour: Number(zoned[4]), minute: Number(zoned[5]), second: Number(zoned[6]),
+    }, tzid);
+    if (ms !== null) {
+      return new Date(ms);
+    }
+  }
   const parsed = parseIcsDateValue(value, isAllDay);
   if (!parsed) {
     return null;
   }
-  const date = new Date(parsed);
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(parsed);
+  const date = dateOnly ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3])) : new Date(parsed);
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
-const getIcsPropDate = (prop, isAllDay = false) => parseIcsDateToDate(prop?.value, isAllDay);
+const getIcsPropDate = (prop, isAllDay = false) => parseIcsDateToDate(prop?.value, isAllDay, prop?.params?.TZID);
+
+// A zoned value becomes an absolute instant, so it is written with a trailing Z like a UTC value.
+const icsOutputTemplate = (prop, isAllDay) => {
+  const wasConverted = !isAllDay
+    && prop?.params?.TZID
+    && ICS_LOCAL_DATE_TIME.test(`${prop?.value || ''}`.trim())
+    && zonedWallTimeToMs({ year: 2026, month: 1, day: 1 }, prop.params.TZID) !== null;
+  return wasConverted ? 'Z' : prop?.value;
+};
 
 const formatIcsOccurrenceDate = (date, templateValue = '', isAllDay = false) => {
   const pad = (value) => String(value).padStart(2, '0');
@@ -1738,8 +1788,8 @@ const formatIcsOccurrenceDate = (date, templateValue = '', isAllDay = false) => 
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 };
 
-const getIcsRecurrenceKey = (value, isAllDay = false) => {
-  const date = parseIcsDateToDate(value, isAllDay);
+const getIcsRecurrenceKey = (value, isAllDay = false, tzid = '') => {
+  const date = parseIcsDateToDate(value, isAllDay, tzid);
   return date ? String(date.getTime()) : '';
 };
 
@@ -1792,90 +1842,33 @@ const getWeekStart = (date, weekStartsOn = 1) => {
   return day;
 };
 
-const buildRecurringIcsStartDates = ({ startDate, rule, isAllDay, timeMin, timeMax }) => {
+// The zone a repeating event's wall clock belongs to: its TZID, UTC for a trailing Z, null for floating
+// times and all-day dates (those follow the calendar of the machine, as before).
+const getIcsRecurrenceZone = (startMeta, isAllDay) => {
+  if (isAllDay) {
+    return null;
+  }
+  const value = `${startMeta?.value || ''}`.trim();
+  if (value.endsWith('Z')) {
+    return 'UTC';
+  }
+  const tzid = startMeta?.params?.TZID;
+  return tzid && zonedWallTimeToMs({ year: 2026, month: 1, day: 1 }, tzid) !== null ? tzid : null;
+};
+
+const buildRecurringIcsStartDates = ({ startDate, rule, isAllDay, timeMin, timeMax, timeZone = null, untilTzid = '' }) => {
   if (!startDate) {
     return [];
   }
-  const freq = (rule.freq || '').toUpperCase();
-  const interval = Math.max(1, Number(rule.interval) || 1);
-  const count = Number(rule.count) || Infinity;
-  const until = rule.until ? parseIcsDateToDate(rule.until, isAllDay) : null;
-  const windowStart = timeMin ? new Date(timeMin) : new Date(Date.now() - 86400000);
-  const windowEnd = timeMax ? new Date(timeMax) : new Date(Date.now() + (14 * 86400000));
-  const hardEnd = until && until < windowEnd ? until : windowEnd;
-  const starts = [];
-  const pushIfInWindow = (candidate, sequenceIndex) => {
-    if (sequenceIndex >= count || candidate < startDate || candidate > hardEnd) {
-      return;
-    }
-    if (candidate >= windowStart && candidate <= windowEnd) {
-      starts.push(candidate);
-    }
-  };
-
-  if (freq === 'DAILY') {
-    let sequenceIndex = Math.max(0, Math.floor((startOfLocalDay(windowStart) - startOfLocalDay(startDate)) / 86400000 / interval) - 1);
-    while (sequenceIndex < count && starts.length < 500) {
-      const candidate = addLocalDays(startDate, sequenceIndex * interval);
-      if (candidate > hardEnd) break;
-      pushIfInWindow(candidate, sequenceIndex);
-      sequenceIndex += 1;
-    }
-    return starts;
-  }
-
-  if (freq === 'WEEKLY') {
-    const weekStartsOn = ICS_WEEKDAY_TO_INDEX[(rule.wkst || 'MO').toUpperCase()] ?? 1;
-    const byDays = (Array.isArray(rule.byDay) && rule.byDay.length ? rule.byDay : null)
-      ?.map((day) => ICS_WEEKDAY_TO_INDEX[day])
-      .filter((day) => day !== undefined) || [startDate.getDay()];
-    const firstWeek = getWeekStart(startDate, weekStartsOn);
-    let candidateWeek = firstWeek;
-    let sequenceIndex = 0;
-    let inspectedWeeks = 0;
-    while (candidateWeek <= hardEnd && sequenceIndex < count && starts.length < 500 && inspectedWeeks < 3000) {
-      const weekOffset = Math.round((candidateWeek - firstWeek) / (7 * 86400000));
-      if (weekOffset >= 0 && weekOffset % interval === 0) {
-        for (const day of byDays) {
-          const dayOffset = (day - weekStartsOn + 7) % 7;
-          const candidateDay = addLocalDays(candidateWeek, dayOffset);
-          const candidate = new Date(
-            candidateDay.getFullYear(),
-            candidateDay.getMonth(),
-            candidateDay.getDate(),
-            startDate.getHours(),
-            startDate.getMinutes(),
-            startDate.getSeconds(),
-            startDate.getMilliseconds(),
-          );
-          if (candidate >= startDate) {
-            pushIfInWindow(candidate, sequenceIndex);
-            sequenceIndex += 1;
-            if (sequenceIndex >= count) {
-              break;
-            }
-          }
-        }
-      }
-      candidateWeek = addLocalDays(candidateWeek, 7);
-      inspectedWeeks += 1;
-    }
-    return starts.sort((left, right) => left - right);
-  }
-
-  if (freq === 'MONTHLY' || freq === 'YEARLY') {
-    const step = freq === 'MONTHLY' ? addLocalMonths : addLocalYears;
-    let sequenceIndex = 0;
-    let candidate = startDate;
-    while (candidate <= hardEnd && sequenceIndex < count && starts.length < 500) {
-      pushIfInWindow(candidate, sequenceIndex);
-      sequenceIndex += 1;
-      candidate = step(startDate, sequenceIndex * interval);
-    }
-    return starts;
-  }
-
-  return [];
+  const until = rule.until ? parseIcsDateToDate(rule.until, isAllDay, untilTzid) : null;
+  return expandRecurrence({
+    startMs: startDate.getTime(),
+    rule,
+    windowStartMs: (timeMin ? new Date(timeMin) : new Date(Date.now() - 86400000)).getTime(),
+    windowEndMs: (timeMax ? new Date(timeMax) : new Date(Date.now() + (14 * 86400000))).getTime(),
+    untilMs: until ? until.getTime() : null,
+    timeZone,
+  }).map((ms) => new Date(ms));
 };
 
 const buildIcsEventFromProps = ({
@@ -1906,7 +1899,7 @@ const buildIcsEventFromProps = ({
   const recurrenceId = props['RECURRENCE-ID']?.[0]?.value || '';
   const isRecurring = Boolean(props.RRULE?.[0]?.value || recurrenceId || occurrenceStart);
   const suffix = occurrenceIndex !== null
-    ? `:${formatIcsOccurrenceDate(occurrenceStart, startMeta?.value, isAllDay)}`
+    ? `:${formatIcsOccurrenceDate(occurrenceStart, icsOutputTemplate(startMeta, isAllDay), isAllDay)}`
     : (recurrenceId ? `:${recurrenceId}` : '');
 
   return {
@@ -1916,8 +1909,8 @@ const buildIcsEventFromProps = ({
     title: decodeIcsText(props.SUMMARY?.[0]?.value || '(No title)'),
     description: decodeIcsText(props.DESCRIPTION?.[0]?.value || ''),
     location: decodeIcsText(props.LOCATION?.[0]?.value || ''),
-    start: formatIcsOccurrenceDate(startDate, startMeta?.value, isAllDay),
-    end: formatIcsOccurrenceDate(endDate, endMeta?.value || startMeta?.value, isAllDay),
+    start: formatIcsOccurrenceDate(startDate, icsOutputTemplate(startMeta, isAllDay), isAllDay),
+    end: formatIcsOccurrenceDate(endDate, icsOutputTemplate(endMeta || startMeta, isAllDay), isAllDay),
     isAllDay,
     htmlLink: decodeIcsText(props.URL?.[0]?.value || defaultUrl || ''),
     calendarId,
@@ -1932,8 +1925,8 @@ const buildIcsEventFromProps = ({
 };
 
 const getIcsExdateKeys = (props, isAllDay) => new Set((props.EXDATE || [])
-  .flatMap((entry) => `${entry.value || ''}`.split(','))
-  .map((value) => getIcsRecurrenceKey(value, isAllDay))
+  .flatMap((entry) => `${entry.value || ''}`.split(',').map((value) => ({ value, tzid: entry.params?.TZID })))
+  .map(({ value, tzid }) => getIcsRecurrenceKey(value, isAllDay, tzid))
   .filter(Boolean));
 
 const isStaleIndefiniteIcsRecurrence = ({ props, rule, startDate, timeMin }) => {
@@ -1966,7 +1959,7 @@ const parseIcsEvents = ({ sourceId, calendarId, calendarSummary, calendarColor =
       const uid = props.UID?.[0]?.value || '';
       const startMeta = props.DTSTART?.[0] || null;
       const isAllDay = (startMeta?.params?.VALUE || '').toUpperCase() === 'DATE' || /^\d{8}$/.test(startMeta?.value || '');
-      const key = getIcsRecurrenceKey(props['RECURRENCE-ID']?.[0]?.value, isAllDay);
+      const key = getIcsRecurrenceKey(props['RECURRENCE-ID']?.[0]?.value, isAllDay, props['RECURRENCE-ID']?.[0]?.params?.TZID);
       if (!uid || !key) {
         return;
       }
@@ -1998,7 +1991,11 @@ const parseIcsEvents = ({ sourceId, calendarId, calendarSummary, calendarColor =
       }
       const overrideKeys = overridesByUid.get(uid) || new Map();
       const exdateKeys = getIcsExdateKeys(props, isAllDay);
-      buildRecurringIcsStartDates({ startDate, rule: rrule, isAllDay, timeMin, timeMax }).forEach((occurrenceStart, occurrenceIndex) => {
+      buildRecurringIcsStartDates({
+        startDate, rule: rrule, isAllDay, timeMin, timeMax,
+        timeZone: getIcsRecurrenceZone(startMeta, isAllDay),
+        untilTzid: startMeta?.params?.TZID,
+      }).forEach((occurrenceStart, occurrenceIndex) => {
         const recurrenceKey = String(occurrenceStart.getTime());
         if (exdateKeys.has(recurrenceKey) || overrideKeys.has(recurrenceKey)) {
           return;
@@ -2420,8 +2417,10 @@ const summarizeForecast = (forecast, startDate, endDate) => {
     return null;
   }
 
-  const startKey = startDate.toISOString().slice(0, 10);
-  const endKey = endDate.toISOString().slice(0, 10);
+  // The forecast's day list is in the forecast location's own zone, so the window is cut in that zone too.
+  const forecastZone = forecast.timezone || 'UTC';
+  const startKey = getLocalDateKey(startDate.getTime(), forecastZone);
+  const endKey = getLocalDateKey(endDate.getTime(), forecastZone);
   const selectedIndexes = forecast.daily.time
     .map((date, index) => ({ date, index }))
     .filter((entry) => entry.date >= startKey && entry.date <= endKey)
@@ -2606,7 +2605,7 @@ const tryFetchHomeForecast = async (config, household, startDate, endDate) => {
       label: weatherConfig.location || 'Home',
       latitude: weatherConfig.lat,
       longitude: weatherConfig.lon,
-      timezone: config.system.timezone || 'UTC',
+      timezone: getConfigTimeZone(config),
     }, startDate, endDate);
     return forecast?.forecast || null;
   }
@@ -3260,7 +3259,7 @@ const RECURRING_ALWAYS_KEEP_PATTERNS = [
 
 const explainBriefEventSelection = (event, config, now = Date.now()) => classifyBriefEvent(event, {
   now,
-  timeZone: config?.system?.timezone || 'UTC',
+  timeZone: getConfigTimeZone(config),
   rules: getContextRules(config),
   suppressRecurring: shouldSuppressRoutineRecurringEvents(config),
   alwaysKeepPatterns: RECURRING_ALWAYS_KEEP_PATTERNS,
@@ -3278,7 +3277,7 @@ const getRelevantBriefEvents = (events, config, limit = 18) => {
     }))
     .filter((entry) => entry.score > -Infinity);
 
-  return selectEventsByHorizon(entries, { now, timeZone: config?.system?.timezone || 'UTC', limit });
+  return selectEventsByHorizon(entries, { now, timeZone: getConfigTimeZone(config), limit });
 };
 
 const getEnabledContextSignals = (config) => ({
@@ -4566,9 +4565,16 @@ const deriveFlightLifecycle = (live) => {
   };
 };
 
+// The calendar date of a departure as written in the event itself (its own offset = the date at the departure
+// place). toISOString() answered in UTC, which is the wrong day for a flight at 00:30 local time.
+const getSegmentDateKey = (value) => {
+  const text = `${value || ''}`;
+  return /^\d{4}-\d{2}-\d{2}/.test(text) ? text.slice(0, 10) : new Date(value).toISOString().slice(0, 10);
+};
+
 const buildTransportCacheKey = (provider, segment) => {
   const routePart = segment.routeLabel || '';
-  const datePart = new Date(segment.start).toISOString().slice(0, 10);
+  const datePart = getSegmentDateKey(segment.start);
   return `${provider}:${segment.type}:${segment.identifier}:${routePart}:${datePart}`;
 };
 
@@ -4626,7 +4632,7 @@ const fetchAviationstackFlight = async (segment, transportSecrets) => {
     return null;
   }
 
-  const date = new Date(segment.start).toISOString().slice(0, 10);
+  const date = getSegmentDateKey(segment.start);
   const params = {
     access_key: transportSecrets.apiKey,
     flight_iata: identifier.code,
@@ -5904,8 +5910,8 @@ const getEventHintTimingWindow = (event, now = Date.now()) => {
   }
 
   const hoursUntilStart = Math.max(0, (startMs - now) / 3600000);
-  const eventDayKey = getEventDayKey(event?.start);
-  const nowDayKey = new Date(now).toISOString().slice(0, 10);
+  const eventDayKey = getZonedEventDayKey(event, runtimeTimeZone);
+  const nowDayKey = getLocalDateKey(now, runtimeTimeZone);
 
   return {
     startMs,
@@ -6015,7 +6021,7 @@ const buildLlmSelectorPrompt = ({ events, activeTrip, nextEvent, config }) => {
   const locale = config.system?.displayLocale === 'de' ? 'de' : 'en';
   const promptPayload = {
     generatedAt: new Date().toISOString(),
-    systemTimezone: config.system.timezone || 'UTC',
+    systemTimezone: getConfigTimeZone(config),
     displayLocale: locale,
     activeTrip: activeTrip
       ? {
@@ -6274,7 +6280,7 @@ const formatEventHintClockTime = (timestamp, config) => {
         hour: '2-digit',
         minute: '2-digit',
         hour12: false,
-        timeZone: config?.system?.timezone || 'UTC',
+        timeZone: getConfigTimeZone(config),
       },
     ).format(new Date(timestamp));
   } catch (error) {
@@ -6722,7 +6728,7 @@ const buildLlmComposerPrompt = ({ insights, config }) => {
   const locale = config.system?.displayLocale === 'de' ? 'de' : 'en';
   const promptPayload = {
     generatedAt: new Date().toISOString(),
-    systemTimezone: config.system.timezone || 'UTC',
+    systemTimezone: getConfigTimeZone(config),
     displayLocale: locale,
     insights,
     instruction: 'Write only value beyond what the calendar already shows. Use only the verified addedFacts.',
@@ -6975,6 +6981,14 @@ const callLlmProvider = ({ provider, apiKey, model, baseUrl, prompt, system, tim
 
 // New pipeline (default): the software builds a verified dossier of today and tomorrow, the model only phrases
 // it, and src/brief/validate.js checks every sentence before it can reach the mirror.
+// Changes whenever the instructions or the answer format change, so an edited prompt is never answered
+// from a result that was produced under the old one.
+const COMPOSER_PROMPT_VERSION = crypto
+  .createHash('sha1')
+  .update(`${COMPOSER_SYSTEM_PROMPT}\n${JSON.stringify(COMPOSER_JSON_SCHEMA)}`)
+  .digest('hex')
+  .slice(0, 12);
+
 const generateDossierBrief = async ({
   calendarCache,
   config,
@@ -7003,17 +7017,9 @@ const generateDossierBrief = async ({
     return buildSkippedResult({ gate, provider, model, privacyMode });
   }
 
-  const refreshMinutes = resolveContextRefreshMinutes(config.services.context);
   const existingLlm = existingContext?.llm;
-  const isFresh = existingLlm?.updatedAt
-    && existingLlm?.debug?.pipeline === 'dossier'
-    && (Date.now() - new Date(existingLlm.updatedAt).getTime()) < (refreshMinutes * 60000);
-  if (!force && isFresh && existingLlm.status === 'ready') {
-    return existingLlm;
-  }
-
   const now = Date.now();
-  const timeZone = config.system?.timezone || 'UTC';
+  const timeZone = getConfigTimeZone(config);
   const locale = config.system?.displayLocale === 'de' ? 'de' : 'en';
   const isIncluded = (event) => explainBriefEventSelection(event, config, now).include;
   const windowEvents = pickWindowEvents({ events: calendarCache.events, now, timeZone, isIncluded });
@@ -7057,6 +7063,14 @@ const generateDossierBrief = async ({
     privacyMode,
     extraFacts,
     isIncluded,
+    couldConflict: getConflictPredicate(household),
+    fingerprintOf: (dossier) => fingerprintDossier(dossier, { provider, model, privacyMode, prompt: COMPOSER_PROMPT_VERSION }),
+    // Same dossier as the stored answer -> no model call. Display polls, restarts and calendar syncs that
+    // changed nothing the model sees all end here.
+    reusePrevious: (fingerprint) => {
+      const decision = decideLlmReuse({ previous: existingLlm, fingerprint, force, now, timeZone });
+      return decision.reuse ? existingLlm : null;
+    },
     callModel: async ({ system, prompt }) => {
       try {
         const result = await callLlmProvider({
@@ -7085,6 +7099,10 @@ const generateDossierBrief = async ({
     },
     parseJson: parseLlmJson,
   });
+
+  if (run.reused) {
+    return existingLlm;
+  }
 
   return buildLlmResult({ run, provider, model, privacyMode, problems });
 };
@@ -7628,6 +7646,52 @@ const writeContextBuildFailureDebug = async ({ error, calendarCache, config, exi
   });
 };
 
+// ---- Context refresh ------------------------------------------------------------------------------------
+// One runner builds the context. Display polls, calendar syncs, household saves and the debug rebuild all go
+// through it, so two builds never run at once (they used to: each could call the model and overwrite the
+// other's result), and a request that arrives during a build is served by exactly one follow-up build.
+const CONTEXT_BUILD_RETRY_MS = 120000;
+let lastContextBuildFailureAt = 0;
+
+const rebuildContext = async ({ forceLlm = false } = {}) => {
+  const [calendarCache, config, existingContext] = await Promise.all([
+    loadCalendarCache(),
+    readConfig(),
+    loadContextCache(),
+  ]);
+  const [secrets, household] = await Promise.all([readSecrets(), readHousehold()]);
+  try {
+    const built = await buildContext(calendarCache, config, secrets, household, existingContext, forceLlm);
+    // Remembers which calendar this context was built from. Without it "the calendar was synced after the
+    // context" stayed true forever once a sync found nothing new, and every display poll rebuilt the context.
+    const context = { ...built, calendarFingerprint: buildCalendarCacheFingerprint(calendarCache) };
+    await writeJsonAtomic(CONTEXT_CACHE_PATH, context, { spaces: 2 });
+    lastContextBuildFailureAt = 0;
+    return context;
+  } catch (error) {
+    lastContextBuildFailureAt = Date.now();
+    console.error('Context rebuild failed:', error.message);
+    await writeContextBuildFailureDebug({ error, calendarCache, config, existingContext });
+    return existingContext;
+  }
+};
+
+const contextRunner = createCoalescedRunner(rebuildContext, {
+  onError: (error) => console.error('Context refresh failed:', error.message),
+});
+
+const isContextStale = ({ context, calendarCache, config, now = Date.now() }) => {
+  const updatedAt = context?.updatedAt ? Date.parse(context.updatedAt) : 0;
+  if (!updatedAt) {
+    return true;
+  }
+  const refreshMinutes = resolveContextRefreshMinutes(config.services.context);
+  return context.calendarFingerprint !== buildCalendarCacheFingerprint(calendarCache)
+    || (now - updatedAt) >= (refreshMinutes * 60000);
+};
+
+// What the display asks for. It never waits for a rebuild (and so never for the model) when there is
+// something to show: it gets the cached context at once and a refresh runs in the background.
 const ensureFreshContextCache = async () => {
   const [context, calendarCache, config] = await Promise.all([
     loadContextCache(),
@@ -7635,34 +7699,29 @@ const ensureFreshContextCache = async () => {
     readConfig(),
   ]);
 
-  const calendarSyncedAt = calendarCache?.syncedAt ? new Date(calendarCache.syncedAt).getTime() : 0;
-  const contextUpdatedAt = context?.updatedAt ? new Date(context.updatedAt).getTime() : 0;
-  const refreshMinutes = resolveContextRefreshMinutes(config.services.context);
-  const shouldRebuild = !context?.updatedAt
-    || (calendarSyncedAt > contextUpdatedAt)
-    || (Date.now() - contextUpdatedAt) >= (refreshMinutes * 60000);
-
-  if (!shouldRebuild) {
+  if (!isContextStale({ context, calendarCache, config })) {
     return { context, config };
   }
-
-  const [secrets, household] = await Promise.all([readSecrets(), readHousehold()]);
-  try {
-    const rebuiltContext = await buildContext(calendarCache, config, secrets, household, context, true);
-    await writeJsonAtomic(CONTEXT_CACHE_PATH, rebuiltContext, { spaces: 2 });
-    return { context: rebuiltContext, config };
-  } catch (error) {
-    console.error('Context rebuild failed:', error.message);
-    await writeContextBuildFailureDebug({ error, calendarCache, config, existingContext: context });
-    return { context, config };
+  if (!context?.updatedAt) {
+    // First start: there is nothing to show yet, so this one request has to wait for the first build.
+    const built = await contextRunner.request();
+    return { context: built || context, config };
   }
+  // A build that is already running will deliver; a build that just failed is not retried on every poll.
+  const recentlyFailed = (Date.now() - lastContextBuildFailureAt) < CONTEXT_BUILD_RETRY_MS;
+  if (!contextRunner.isRunning() && !recentlyFailed) {
+    contextRunner.trigger();
+  }
+  return { context, config };
 };
 
-const syncCalendarData = async ({ forceContext = false } = {}) => {
-  const [config, secrets, household, sourceStore] = await Promise.all([
+// ---- Calendar sync ------------------------------------------------------------------------------------------
+// Fetching calendars is cheap and must not wait for the (slow, paid) model. The sync writes the calendar cache
+// and then only STARTS a context refresh, unless the caller needs the result (awaitContext).
+const runCalendarSync = async ({ forceContext = false, forceLlm = false, awaitContext = false } = {}) => {
+  const [config, secrets, sourceStore] = await Promise.all([
     readConfig(),
     readSecrets(),
-    readHousehold(),
     readCalendarSources(),
   ]);
   const previousCalendarCache = await readRuntimeJsonIfExists(CALENDAR_CACHE_PATH, DEFAULT_CALENDAR_CACHE);
@@ -7678,27 +7737,35 @@ const syncCalendarData = async ({ forceContext = false } = {}) => {
   const now = new Date();
   const timeMin = googleBundle?.timeMin || new Date(now.getTime() - 86400000).toISOString();
   const timeMax = googleBundle?.timeMax || new Date(now.getTime() + ((Number(config.services.context.tripLookaheadDays) || 14) * 86400000)).toISOString();
-  const externalBundles = await Promise.all((sourceStore.sources || []).map((source) => fetchCalendarSourceBundle({
+  // A source that fails keeps the events it delivered last time (marked stale, for 48 h) instead of
+  // contributing nothing: one timeout used to be enough to wipe a calendar from the brief.
+  const externalBundles = (await Promise.all((sourceStore.sources || []).map((source) => fetchCalendarSourceBundle({
     source,
     secrets,
     timeMin,
     timeMax,
-  })));
+  })))).map((bundle) => keepPreviousOnError({ bundle, previous: previousCalendarCache }));
+  const googleResult = googleSource
+    ? keepPreviousOnError({
+      bundle: googleBundle || { calendars: [], events: [], source: googleSource },
+      previous: previousCalendarCache,
+    })
+    : null;
 
   const calendarCache = {
     syncedAt: new Date().toISOString(),
     connectedEmail: googleBundle?.connectedEmail || previousCalendarCache.connectedEmail || '',
     calendars: [
-      ...(googleBundle?.calendars || []),
+      ...(googleResult?.calendars || []),
       ...externalBundles.flatMap((bundle) => bundle.calendars || []),
     ],
     selectedCalendarIds: googleBundle?.selectedCalendarIds || config.services.google.selectedCalendarIds || [],
     events: [
-      ...(googleBundle?.events || []),
+      ...(googleResult?.events || []),
       ...externalBundles.flatMap((bundle) => bundle.events || []),
     ].sort((left, right) => new Date(left.start) - new Date(right.start)),
     sources: [
-      ...(googleSource ? [googleSource] : []),
+      ...(googleResult ? [googleResult.source] : []),
       ...externalBundles.map((bundle) => bundle.source),
     ],
   };
@@ -7707,26 +7774,24 @@ const syncCalendarData = async ({ forceContext = false } = {}) => {
   await writeJsonAtomic(CALENDAR_CACHE_PATH, calendarCache, { spaces: 2 });
 
   const existingContext = await readRuntimeJsonIfExists(CONTEXT_CACHE_PATH, null);
-  const refreshMinutes = resolveContextRefreshMinutes(config.services.context);
-  const shouldRefreshContext = forceContext
-    || calendarChanged
-    || !existingContext?.updatedAt
-    || (Date.now() - new Date(existingContext.updatedAt).getTime()) >= (refreshMinutes * 60000);
-
-  if (shouldRefreshContext) {
-    try {
-      const context = await buildContext(calendarCache, config, secrets, household, existingContext, forceContext || calendarChanged);
-      await writeJsonAtomic(CONTEXT_CACHE_PATH, context, { spaces: 2 });
-    } catch (error) {
-      console.error('Context rebuild failed:', error.message);
-      await writeContextBuildFailureDebug({ error, calendarCache, config, existingContext });
+  if (forceContext || forceLlm || calendarChanged || isContextStale({ context: existingContext, calendarCache, config })) {
+    if (awaitContext) {
+      await contextRunner.request({ forceLlm });
+    } else {
+      contextRunner.trigger({ forceLlm });
     }
   }
 
   return calendarCache;
 };
 
-const syncGoogleCalendarData = async ({ forceContext = false } = {}) => syncCalendarData({ forceContext });
+// Syncs never overlap either: a request during a sync joins one follow-up sync.
+const calendarSyncRunner = createCoalescedRunner(runCalendarSync, {
+  onError: (error) => console.error('Calendar sync failed:', error.message),
+});
+const syncCalendarData = (options = {}) => calendarSyncRunner.request(options);
+
+const syncGoogleCalendarData = async (options = {}) => syncCalendarData(options);
 
 const loadCalendarCache = async () => readRuntimeJsonIfExists(CALENDAR_CACHE_PATH, DEFAULT_CALENDAR_CACHE);
 
@@ -7833,30 +7898,29 @@ const startPowerManager = () => {
   }, 60000);
 };
 
-const startCalendarSyncLoop = () => {
-  let syncInFlight = false;
-  const runSync = async () => {
-    if (syncInFlight) {
-      return;
-    }
+// Calendars are fetched on their own schedule (default 15 minutes, 5-180 allowed). The much slower context
+// refresh (default 180 minutes, with the model call) is decided separately, in runCalendarSync/isContextStale.
+const DEFAULT_CALENDAR_SYNC_MINUTES = 15;
+const resolveCalendarSyncMinutes = (contextConfig = {}) => {
+  const minutes = Number(contextConfig?.calendarSyncMinutes);
+  return Number.isFinite(minutes) && minutes > 0 ? Math.min(180, Math.max(5, Math.round(minutes))) : DEFAULT_CALENDAR_SYNC_MINUTES;
+};
 
-    syncInFlight = true;
+const startCalendarSyncLoop = () => {
+  const runSync = async () => {
     try {
       const [config, cache] = await Promise.all([
         readConfig(),
         loadCalendarCache(),
       ]);
-      const refreshMinutes = resolveContextRefreshMinutes(config.services.context);
       const lastSyncedAt = cache?.syncedAt ? new Date(cache.syncedAt).getTime() : 0;
-      const shouldSync = !lastSyncedAt || (Date.now() - lastSyncedAt) >= (refreshMinutes * 60000);
+      const shouldSync = !lastSyncedAt || (Date.now() - lastSyncedAt) >= (resolveCalendarSyncMinutes(config.services.context) * 60000);
       if (!shouldSync) {
         return;
       }
       await syncCalendarData();
     } catch (error) {
       console.error('Calendar sync failed:', error.message);
-    } finally {
-      syncInFlight = false;
     }
   };
 
@@ -7894,15 +7958,8 @@ app.get('/api/household', async (req, res) => {
 app.post('/api/household', async (req, res) => {
   try {
     const household = await saveHousehold(req.body);
-    const [config, secrets, calendarCache, existingContext] = await Promise.all([
-      readConfig(),
-      readSecrets(),
-      loadCalendarCache(),
-      readRuntimeJsonIfExists(CONTEXT_CACHE_PATH, null),
-    ]);
-
-    const context = await buildContext(calendarCache, config, secrets, household, existingContext, false);
-    await writeJsonAtomic(CONTEXT_CACHE_PATH, context, { spaces: 2 });
+    // Members and their calendars decide which overlaps count as conflicts, so the brief is rebuilt now.
+    await contextRunner.request();
 
     res.json({ success: true, household });
   } catch (error) {
@@ -8332,7 +8389,7 @@ app.post('/api/llm/test', rateLimitMiddleware(testLlmLimiter), async (req, res) 
 
 app.post('/api/debug/daily-brief/rebuild', limitExpensive, async (req, res) => {
   try {
-    await syncGoogleCalendarData({ forceContext: true });
+    await syncCalendarData({ forceContext: true, forceLlm: true, awaitContext: true });
 
     const debug = await readDailyBriefDebug();
     res.json({ success: true, debug });

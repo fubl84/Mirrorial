@@ -33,13 +33,13 @@ const hourOfDay = (ms, timeZone) => {
 
 // Facts about single events and about pairs of events. `events` are the brief candidates for the
 // next two days; `now` decides what is still ahead.
-const buildScheduleFacts = ({ events, now = Date.now(), timeZone = 'UTC' }) => {
+const buildScheduleFacts = ({ events, now = Date.now(), timeZone = 'UTC', couldConflict }) => {
   const facts = [];
   // `params` keep the raw values so deterministic fallback bullets can be rendered in any language;
   // `text` is the English statement the model gets.
   const add = (event, kind, text, params = {}) => facts.push({ eventId: event.id, kind, text, params });
 
-  findOverlaps(events).forEach(([first, second]) => {
+  findOverlaps(events, { couldConflict }).forEach(([first, second]) => {
     // `otherEventId` lets later steps recognise the two mirrored facts of one collision as a pair.
     add(first, 'conflict', `Overlaps with "${cleanText(second.title, 50)}" (${timeRange(second, timeZone)}).`,
       { otherTitle: cleanText(second.title, 50), otherRange: timeRange(second, timeZone), otherEventId: second.id });
@@ -47,7 +47,7 @@ const buildScheduleFacts = ({ events, now = Date.now(), timeZone = 'UTC' }) => {
       { otherTitle: cleanText(first.title, 50), otherRange: timeRange(first, timeZone), otherEventId: first.id });
   });
 
-  findTightTransitions(events, { timeZone }).forEach(({ first, second, gapMinutes }) => {
+  findTightTransitions(events, { timeZone, couldConflict }).forEach(({ first, second, gapMinutes }) => {
     add(second, 'tight_transition',
       `Only ${gapMinutes} min between "${cleanText(first.title, 40)}" (${cleanText(first.location, 40)}) and "${cleanText(second.title, 40)}" (${cleanText(second.location, 40)}), different places.`,
       { gapMinutes, otherTitle: cleanText(first.title, 40) });

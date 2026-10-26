@@ -42,14 +42,24 @@ const runDossierBrief = async ({
   privacyMode = 'cloud-redacted',
   extraFacts = [],
   isIncluded = null,
+  couldConflict = undefined,
+  fingerprintOf = null,
+  reusePrevious = null,
   callModel,
   parseJson,
 }) => {
-  const dossier = buildDossier({ events, now, timeZone, locale, privacyMode, extraFacts, isIncluded });
-  const debug = { pipeline: 'dossier', dossier, usedModel: false };
+  const dossier = buildDossier({ events, now, timeZone, locale, privacyMode, extraFacts, isIncluded, couldConflict });
+  const fingerprint = fingerprintOf ? fingerprintOf(dossier) : '';
+  const debug = { pipeline: 'dossier', dossier, usedModel: false, fingerprint };
 
   if (!dossier.hasContent) {
     return { status: 'ready', reason: 'nothing_to_report', brief: null, bullets: [], dossier, debug };
+  }
+
+  // Same input as the last answer: no model call. `reusePrevious(fingerprint)` returns the stored result or null.
+  const reused = reusePrevious ? reusePrevious(fingerprint, dossier) : null;
+  if (reused) {
+    return { ...reused, reused: true };
   }
 
   let accepted = [];

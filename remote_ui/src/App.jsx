@@ -3662,7 +3662,7 @@ function App() {
                                   {source.syncStatus && (
                                     <div className={source.syncStatus === 'error' ? 'mt-2 text-xs text-amber-300' : 'mt-2 text-xs text-emerald-300'}>
                                       {source.syncStatus === 'error'
-                                        ? `Last sync failed: ${source.syncError || 'unknown error'}`
+                                        ? `Last sync failed: ${source.syncError || 'unknown error'}${source.syncStale ? ` Showing the ${source.syncEventCount ?? 0} events from the last successful sync${source.syncLastSuccessAt ? ` (${new Date(source.syncLastSuccessAt).toLocaleString()})` : ''}.` : ''}`
                                         : `Last sync ready${source.syncEventCount !== null && source.syncEventCount !== undefined ? `, ${source.syncEventCount} events` : ''}.`}
                                     </div>
                                   )}

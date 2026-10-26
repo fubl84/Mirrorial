@@ -58,6 +58,7 @@ const buildDossier = ({
   privacyMode = 'cloud-redacted',
   extraFacts = [],
   isIncluded = null,
+  couldConflict = undefined,
   maxEvents = DEFAULT_MAX_EVENTS,
 }) => {
   const zone = safeTimeZone(timeZone);
@@ -89,7 +90,7 @@ const buildDossier = ({
   });
 
   const rawFacts = [
-    ...buildScheduleFacts({ events: windowEvents, now, timeZone: zone }).map((fact) => ({ ...fact, source: 'schedule' })),
+    ...buildScheduleFacts({ events: windowEvents, now, timeZone: zone, couldConflict }).map((fact) => ({ ...fact, source: 'schedule' })),
     ...['today', 'tomorrow'].flatMap((day) => buildDayFacts({
       events: windowEvents.filter((event) => !event.isAllDay && dayOf(event) === day),
       dayLabel: day,

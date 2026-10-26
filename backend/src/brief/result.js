@@ -9,6 +9,8 @@ const buildLlmResult = ({ run, provider, model, privacyMode, problems = [], now 
     privacyMode,
     enabled: true,
     pipeline: 'dossier',
+    // What the model was given. Same fingerprint later = same answer, so no new model call (see freshness.js).
+    fingerprint: run.debug?.fingerprint || '',
     status: run.status,
     reason: run.reason || '',
     degraded: Boolean(run.degraded),

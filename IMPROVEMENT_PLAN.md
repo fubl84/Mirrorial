@@ -178,7 +178,7 @@ Gaps to close:
   - With `briefCalendarMode: include_selected` (current Pi config) newly added subscription calendars are NOT part of the
     brief until ticked in the brief calendar list: first e2e run had 0 eligible events for exactly this reason.
   - A hostile event title is still shown, inside quotation marks, by the deterministic notes.
-  - Brief is still rebuilt (and the model called) on every context refresh with `force=true`; caching is Phase 5.
+  - (Resolved in Phase 5: the model is only called when its input changed.)
 - [x] Phase 4 – new `backend/src/llm/` (`providers`, `openai`, `anthropic`, `google`, `schema`, `retry`, `http`, `diagnostics`, `models`, `text`).
   One interface `generateJson({provider, apiKey, model, baseUrl, system, prompt, schema, timeoutMs})` used by the dossier
   pipeline (the legacy pipeline goes through the same layer). One readable schema per task; `prepareSchema` reshapes it per
@@ -206,7 +206,55 @@ Gaps to close:
     (converted per provider by `prepareSchema`).
   - `learned` capabilities live in memory only: a restart probes again (costs at most one extra failed request per model).
   - Not covered: streaming, prompt caching, the OpenAI Responses API (Chat Completions is used; it keeps custom/local servers working).
-- [ ] Phase 5
+- [x] Phase 5 – reliability. 292 backend tests green; remote UI builds; live check against a local mock (30 display polls = 0 extra
+  model calls, 5 polls answered in ~85 ms while a 4 s model call ran, 4 simultaneous rebuilds = 2 model calls, a dead feed keeps
+  its events, no temp files left, `config.json` stays mode 600).
+  - **Model calls** (`src/brief/freshness.js`): the dossier gets a fingerprint of exactly what the model is told (events, facts,
+    language, focus, provider, model, privacy mode, prompt version). Same fingerprint -> the stored answer is reused, so display
+    polls, restarts and syncs that change nothing cost nothing. "17 minutes until X" is deliberately not part of it. The answer is
+    refreshed when the part of the day changes (morning/afternoon/evening) and after 12 h as a safety net. A failed or degraded
+    answer is retried after 15 min, not on every poll and not after hours. `refreshMinutes` no longer controls model calls.
+  - **One build at a time** (`src/runtime/coalesce.js`): context builds and calendar syncs each go through a runner that never
+    overlaps itself; requests during a run share exactly one follow-up run (so a household saved mid-build is not lost).
+    `GET /api/display/context` returns the cached context at once and refreshes in the background; only the very first start waits.
+    A build that just failed is not retried by display polls for 2 min. The context remembers the calendar fingerprint it was
+    built from (before, "synced after the context" stayed true forever and every poll rebuilt it).
+  - **Sync decoupled:** calendars are fetched every `services.context.calendarSyncMinutes` (default 15, 5-180); the sync only
+    starts a context refresh when something changed. A failing source keeps its last events for 48 h (`stale`, shown in the UI)
+    instead of vanishing from the brief.
+  - **Time** (`src/time/zone.js`): `resolveTimeZone` - empty/"auto" = the device's zone; the old default "UTC" on a device that is not
+    on UTC also means the device's zone ("Etc/UTC" = really UTC). All `config.system.timezone || 'UTC'` reads and the remaining
+    `toISOString().slice(0,10)` day comparisons use it (forecast days are cut in the forecast's own zone, flight dates keep the
+    date written in the event). ICS: `DTSTART;TZID=...` is now converted (it was read as device-local time), all-day dates are
+    local dates (not UTC midnight), recurrence is expanded on the wall clock of the event's own zone (`src/calendar/recurrence.js`:
+    DST-safe, plus `BYDAY=2TU` / `-1FR` and `BYMONTHDAY`, which were wrong before: they repeated the first date's day-of-month).
+  - **Same person** (`src/brief/people.js`): overlaps and tight transitions are only reported between calendars that can belong to
+    the same person (same calendar, same household member, or a calendar nobody owns). No assignment at all = old behaviour.
+    The household save now rebuilds the brief.
+  - **Atomic writes** (`src/runtime/atomicWrite.js`): temp file in the same directory + fsync + `rename` over the target. The old
+    helper (`fs.move` with `overwrite`) deleted the target first, so a reader could see no file. Used for config, secrets, household,
+    calendar sources and the Google account too. The display needs no change: checked with the `watcher` package version from
+    `pubspec.lock` (1.2.0) that 12 atomic replacements give 12 change events, no parse errors, no remove event.
+  - **ICS library: evaluated, not switched.** `ical.js` 2.2.1 agrees with the own parser on 6 of 7 recurrence cases (the 7th is the
+    yearly all-day birthday, where the own parser hides the event unless its title looks like a birthday - a deliberate rule).
+    Before the fixes above the own parser was wrong on 2 (`2TU`, `-1FR`); after them there is no case where the library is right and
+    the own code is wrong. `ical.js` is ESM-only (the backend is CommonJS), and the parser also carries the decline/ownership/alarm
+    handling, so a switch would be a rewrite for no demonstrated gain.
+  Known limits / open:
+  - NOT verified on the Pi: its own time zone. The `config.json` on the development machine says "UTC" (the old default), and
+    that now resolves to the device's zone (Europe/Berlin here). If the Pi itself runs on UTC, the brief uses UTC too ("today" is
+    wrong between 22:00/23:00 and midnight local time). Fix: `timedatectl set-timezone Europe/Berlin` on the Pi, or put
+    `Europe/Berlin` into `system.timezone`.
+  - `services.context.calendarSyncMinutes` is read from the config but has no field in the remote UI yet (default 15 min).
+  - The new context/sync runners in `index.js` are only covered by the live script, not by unit tests: the pieces they use are
+    (coalescing, freshness, merge, atomic write), the wiring is not.
+  - Check 8 of the live script only proves the debug view is readable; the zone logic itself is covered by unit tests, not by the live run.
+  - The same-person rule needs calendars assigned to household members; with a shared family calendar it still treats everything as
+    competing (on purpose: no information, no guessing).
+  - `BYSETPOS`, `BYWEEKNO`, `BYYEARDAY`, and `BYMONTHDAY` with FREQ=YEARLY are still not expanded (the ical.js comparison did not
+    cover them either). Windows zone names ("W. Europe Standard Time") are not mapped and keep the old behaviour.
+  - Coalescing state is in memory: a restart forgets a queued follow-up (the next display poll starts a new one).
+  - Forced refresh (`/api/debug/daily-brief/rebuild`) still calls the model by design.
 - [ ] Phase 6
 - [ ] Phase 7
 - [ ] Phase 8
