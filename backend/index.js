@@ -6981,7 +6981,7 @@ const callAnthropic = async ({ apiKey, model, prompt, system = 'Return valid JSO
   const response = await axios.post('https://api.anthropic.com/v1/messages', {
     model,
     max_tokens: 1200,
-    temperature: 0.2,
+    // No `temperature`: current Claude models reject it ("deprecated for this model") and older ones work without it.
     system,
     messages: [
       { role: 'user', content: prompt },
